@@ -279,10 +279,17 @@ export class KnowledgeConceptService {
   async refreshConcepts(baseId: string, conceptIds: string[]): Promise<KnowledgeConceptMutationResult> {
     const { found, notFound } = await this.resolveConceptItemIds(baseId, conceptIds, 'refreshConcepts')
     if (found.length > 0) {
-      await this.ingestionService.reindexItems(
+      const result = await this.ingestionService.reindexItems(
         baseId,
         found.map((entry) => entry.itemId)
       )
+      if (result.status === 'split_confirmation_required') {
+        await this.ingestionService.discardSplitConfirmation(result.confirmation.token)
+        throw DataApiErrorFactory.invalidOperation(
+          'refreshConcepts',
+          'Large PDF sources must be rebuilt from the data source list so their split plan can be confirmed'
+        )
+      }
     }
     return { applied: found.map((entry) => entry.conceptId), notFound }
   }

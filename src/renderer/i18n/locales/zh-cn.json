@@ -3143,6 +3143,15 @@
         "end_reached": "没有更多了",
         "loading_more": "加载更多…"
       },
+      "pdf_split": {
+        "confirm": "拆分并上传",
+        "description": "这些 PDF 超出 {{processor}} 的稳定处理范围。Cherry Studio 将保留原文件，并把每个分片作为独立知识项上传。",
+        "disk": "所需磁盘空间",
+        "file_summary": "{{pages}} 页 · {{size}} · {{parts}} 个分片",
+        "files": "PDF 文件",
+        "tasks": "上传任务",
+        "title": "拆分大型 PDF 文件"
+      },
       "preview": {
         "failed": "预览原文失败",
         "unavailable": "当前数据源没有可预览的原文"
@@ -3154,7 +3163,9 @@
         "embedding": "嵌入中",
         "error": "错误",
         "pending": "等待中",
-        "ready": "就绪"
+        "provider_timeout": "服务商超时",
+        "ready": "就绪",
+        "size_exceeded": "超出 {{limit}}"
       },
       "table": {
         "aria_label": "数据源列表",

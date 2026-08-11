@@ -476,7 +476,13 @@ export async function manageKnowledge(
       case 'add': {
         const built = buildAddInput(input)
         if (!built.ok) return { error: built.error }
-        await service.addItems(input.baseId, [built.input])
+        const result = await service.addItems(input.baseId, [built.input])
+        if (result.status === 'split_confirmation_required') {
+          await service.discardSplitConfirmation(result.confirmation.token)
+          return {
+            error: 'This PDF requires splitting. Add it from the knowledge data source UI to review the split plan.'
+          }
+        }
         return { action: 'add', added: [built.source] }
       }
       case 'delete': {

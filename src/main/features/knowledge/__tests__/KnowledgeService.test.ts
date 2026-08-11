@@ -53,7 +53,13 @@ const {
   getMaterialByRelativePathMock,
   readMaterialContentMock,
   probeKnowledgeFileMock,
-  probeKnowledgeSourcePathMock
+  probeKnowledgeSourcePathMock,
+  pdfSplitCleanupAllMock,
+  pdfSplitCleanupExpiredMock,
+  pdfSplitDiscardMock,
+  pdfSplitPreflightAddMock,
+  pdfSplitPreflightReindexMock,
+  registerIntervalMock
 } = vi.hoisted(() => ({
   cancelManyMock: vi.fn(),
   cancelMock: vi.fn(),
@@ -94,7 +100,13 @@ const {
   getMaterialByRelativePathMock: vi.fn(),
   readMaterialContentMock: vi.fn(),
   probeKnowledgeFileMock: vi.fn(),
-  probeKnowledgeSourcePathMock: vi.fn()
+  probeKnowledgeSourcePathMock: vi.fn(),
+  pdfSplitCleanupAllMock: vi.fn(),
+  pdfSplitCleanupExpiredMock: vi.fn(),
+  pdfSplitDiscardMock: vi.fn(),
+  pdfSplitPreflightAddMock: vi.fn(),
+  pdfSplitPreflightReindexMock: vi.fn(),
+  registerIntervalMock: vi.fn()
 }))
 
 vi.mock('@application', async () => {
@@ -133,6 +145,21 @@ vi.mock('@logger', () => ({
   }
 }))
 
+vi.mock('../ingestion/pdfSplit/PdfSplitService', () => ({
+  pdfSplitService: {
+    bindDirectorySplits: vi.fn(),
+    cleanupAll: pdfSplitCleanupAllMock,
+    cleanupExpired: pdfSplitCleanupExpiredMock,
+    confirmAdd: vi.fn(),
+    confirmReindex: vi.fn(),
+    discard: pdfSplitDiscardMock,
+    discardDirectorySplits: vi.fn(),
+    preflightAdd: pdfSplitPreflightAddMock,
+    preflightReindex: pdfSplitPreflightReindexMock,
+    publishStagedSplit: vi.fn()
+  }
+}))
+
 vi.mock('node:fs/promises', () => ({
   default: {
     lstat: fsLstatMock,
@@ -144,6 +171,7 @@ vi.mock('@main/core/lifecycle', async (importOriginal) => {
   const actual = await importOriginal<typeof LifecycleModule>()
 
   class MockBaseService {
+    registerInterval = registerIntervalMock
     registerDisposable = vi.fn((disposableOrFn: { dispose: () => void } | (() => void)) => {
       return typeof disposableOrFn === 'function' ? { dispose: disposableOrFn } : disposableOrFn
     })
@@ -380,6 +408,9 @@ describe('KnowledgeService', () => {
     fileProcessingStartJobMock.mockResolvedValue({ id: 'fp-job-1', snapshot: {}, finished: Promise.resolve({}) })
     getJobMock.mockResolvedValue(null)
     listMock.mockResolvedValue([])
+    cancelMock.mockResolvedValue({ outcome: 'cancelled' })
+    pdfSplitPreflightAddMock.mockResolvedValue(null)
+    pdfSplitPreflightReindexMock.mockResolvedValue(null)
     getIndexStoreMock.mockReturnValue({
       search: storeSearchMock,
       listMaterialUnits: listMaterialUnitsMock,
@@ -428,6 +459,15 @@ describe('KnowledgeService', () => {
     }
 
     expect(cancelManyMock).not.toHaveBeenCalled()
+  })
+
+  it('cleans stale PDF split staging before accepting runtime work', async () => {
+    const service = new KnowledgeService()
+
+    await (service as unknown as { onReady: () => Promise<void> }).onReady()
+
+    expect(pdfSplitCleanupAllMock).toHaveBeenCalledTimes(1)
+    expect(registerIntervalMock).toHaveBeenCalledWith(expect.any(Function), 60_000)
   })
 
   it('recovers deleting roots by enqueueing delete cleanup jobs after all services are ready', async () => {
@@ -524,6 +564,32 @@ describe('KnowledgeService', () => {
     await (service as unknown as { onAllReady: () => Promise<void> }).onAllReady()
 
     expect(knowledgeItemFailInterruptedItemsMock).toHaveBeenCalledWith(KNOWLEDGE_ITEM_ERROR_INDEXING_INTERRUPTED)
+  })
+
+  it('cancels knowledge-linked file processing jobs before parking interrupted items', async () => {
+    const service = new KnowledgeService()
+    listMock.mockResolvedValueOnce([
+      {
+        id: 'fp-job-1',
+        type: 'file-processing.remote-poll',
+        status: 'running',
+        input: { context: { dataId: 'file-1' } }
+      },
+      {
+        id: 'other-job',
+        type: 'file-processing.background',
+        status: 'running',
+        input: { context: {} }
+      }
+    ])
+
+    await (service as unknown as { onAllReady: () => Promise<void> }).onAllReady()
+
+    expect(cancelMock).toHaveBeenCalledWith('fp-job-1', 'knowledge-startup-recovery')
+    expect(cancelMock).not.toHaveBeenCalledWith('other-job', expect.anything())
+    expect(cancelMock.mock.invocationCallOrder[0]).toBeLessThan(
+      knowledgeItemFailInterruptedItemsMock.mock.invocationCallOrder[0]
+    )
   })
 
   it('does not let interrupted-item recovery failure abort startup', async () => {
@@ -1152,6 +1218,70 @@ describe('KnowledgeService', () => {
     })
   })
 
+  it('returns a split confirmation before creating rows, copying files, or scheduling work', async () => {
+    const service = new KnowledgeService()
+    const confirmation = {
+      token: 'split-token',
+      expiresAt: '2026-08-10T08:10:00.000Z',
+      processorId: 'doc2x',
+      files: [
+        {
+          sourceName: 'source.pdf',
+          pageCount: 31,
+          sourceBytes: 1024,
+          parts: [{ pageStart: 1, pageEnd: 31, bytes: 1024 }]
+        }
+      ],
+      totalTasks: 1,
+      estimatedDiskBytes: 1024
+    }
+    knowledgeBaseGetByIdMock.mockReturnValue(createBase({ fileProcessorId: 'doc2x' }))
+    pdfSplitPreflightAddMock.mockResolvedValueOnce(confirmation)
+
+    await expect(
+      service.addItems('kb-1', [
+        { type: 'file', data: { source: '/docs/source.pdf', path: '/docs/source.pdf' as AbsoluteFilePath } }
+      ])
+    ).resolves.toEqual({ status: 'split_confirmation_required', confirmation })
+
+    expect(knowledgeItemCreateActiveMock).not.toHaveBeenCalled()
+    expect(copyFileIntoKnowledgeBaseAtMock).not.toHaveBeenCalled()
+    expect(fileProcessingStartJobMock).not.toHaveBeenCalled()
+    expect(enqueueMock).not.toHaveBeenCalled()
+  })
+
+  it('does not cancel a replaced item job before its PDF split is confirmed', async () => {
+    const service = new KnowledgeService()
+    const existing = createFileItem('existing-file', 'kb-1', '/stored/source.pdf', 'processing')
+    knowledgeBaseGetByIdMock.mockReturnValue(createBase({ fileProcessorId: 'doc2x' }))
+    knowledgeItemGetRootItemsByBaseIdMock.mockReturnValueOnce([existing])
+    pdfSplitPreflightAddMock.mockResolvedValueOnce({
+      token: 'split-token',
+      expiresAt: '2026-08-10T08:10:00.000Z',
+      processorId: 'doc2x',
+      files: [
+        {
+          sourceName: 'source.pdf',
+          pageCount: 31,
+          sourceBytes: 1024,
+          parts: [{ pageStart: 1, pageEnd: 31, bytes: 1024 }]
+        }
+      ],
+      totalTasks: 1,
+      estimatedDiskBytes: 1024
+    })
+
+    await service.addItems(
+      'kb-1',
+      [{ type: 'file', data: { source: '/docs/source.pdf', path: '/docs/source.pdf' as AbsoluteFilePath } }],
+      'replace'
+    )
+
+    expect(listMock).not.toHaveBeenCalled()
+    expect(cancelMock).not.toHaveBeenCalled()
+    expect(knowledgeItemDeleteMock).not.toHaveBeenCalled()
+  })
+
   it('starts file processing and schedules a check job for supported document files when the base has a processor', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-08T00:00:00.000Z'))
@@ -1191,7 +1321,7 @@ describe('KnowledgeService', () => {
         idempotencyKey: 'knowledge:kb-1:file-1:fp-check:fp-job-1:0',
         queue: 'base.kb-1',
         parentId: 'fp-job-1',
-        scheduledAt: Date.parse('2026-04-08T00:00:05.000Z')
+        scheduledAt: Date.parse('2026-04-08T00:00:15.000Z')
       })
     )
     expect(enqueueMock).not.toHaveBeenCalledWith('knowledge.index-documents', expect.anything(), expect.anything())
@@ -1547,7 +1677,14 @@ describe('KnowledgeService', () => {
     )
   })
 
-  it('schedules follow-up file-processing checks with a five-second delay', async () => {
+  it.each([
+    [0, 15_000],
+    [1, 30_000],
+    [2, 60_000],
+    [3, 120_000],
+    [4, 300_000],
+    [99, 300_000]
+  ])('backs pending file-processing check round %i off by %i ms', async (pollRound, delayMs) => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-04-08T00:00:00.000Z'))
     const service = new KnowledgeService()
@@ -1570,7 +1707,7 @@ describe('KnowledgeService', () => {
     ).ingestionService
 
     await ingestionService.scheduleFileProcessingCheck('kb-1', 'file-1', 'fp-job-1', {
-      pollRound: 1,
+      pollRound,
       firstScheduledAt: Date.parse('2026-04-08T00:00:00.000Z'),
       parentJobId: 'check-job-0',
       processedRelativePath: 'source.md'
@@ -1582,15 +1719,15 @@ describe('KnowledgeService', () => {
         baseId: 'kb-1',
         itemId: 'file-1',
         fileProcessingJobId: 'fp-job-1',
-        pollRound: 1,
+        pollRound,
         firstScheduledAt: Date.parse('2026-04-08T00:00:00.000Z'),
         processedRelativePath: 'source.md'
       },
       expect.objectContaining({
-        idempotencyKey: 'knowledge:kb-1:file-1:fp-check:fp-job-1:1',
+        idempotencyKey: `knowledge:kb-1:file-1:fp-check:fp-job-1:${pollRound}`,
         queue: 'base.kb-1',
         parentId: 'check-job-0',
-        scheduledAt: Date.parse('2026-04-08T00:00:05.000Z')
+        scheduledAt: Date.parse('2026-04-08T00:00:00.000Z') + delayMs
       })
     )
   })
@@ -1711,6 +1848,27 @@ describe('KnowledgeService', () => {
 
     expect(knowledgeItemSetSubtreeStatusTxMock).toHaveBeenCalledWith(expect.anything(), 'kb-1', ['note-1'], 'deleting')
     expect(enqueueTxMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects deleting a managed PDF part without deleting or enqueueing anything', async () => {
+    const service = new KnowledgeService()
+    const part = createFileItem('part-1', 'kb-1', '/docs/report_0001-0030.pdf', 'completed')
+    knowledgeItemGetSubtreeItemsMock.mockReturnValueOnce([
+      {
+        ...part,
+        data: {
+          ...part.data,
+          pdfPart: { partIndex: 1, pageStart: 1, pageEnd: 30 }
+        }
+      }
+    ])
+
+    await expect(service.deleteItems('kb-1', ['part-1'])).rejects.toMatchObject({
+      code: ErrorCode.VALIDATION_ERROR,
+      message: 'Delete the split PDF directory to remove all of its parts'
+    })
+    expect(knowledgeItemSetSubtreeStatusTxMock).not.toHaveBeenCalled()
+    expect(enqueueTxMock).not.toHaveBeenCalled()
   })
 
   it('collapses nested delete and reindex inputs to top-level roots', async () => {

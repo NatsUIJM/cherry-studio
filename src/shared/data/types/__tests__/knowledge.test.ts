@@ -5,6 +5,8 @@ import {
   getKnowledgeItemDisplayTitle,
   getKnowledgeNoteFirstLine,
   getKnowledgePathBasename,
+  KnowledgeAddItemsResultSchema,
+  KnowledgeItemDataSchema,
   KnowledgeSearchResultSchema
 } from '../knowledge'
 
@@ -41,6 +43,56 @@ describe('KnowledgeSearchResultSchema', () => {
     }
 
     expect(() => KnowledgeSearchResultSchema.parse(invalidResult)).toThrow()
+  })
+})
+
+describe('PDF split knowledge contracts', () => {
+  it('accepts synthetic parent and managed part metadata', () => {
+    expect(
+      KnowledgeItemDataSchema.parse({
+        source: '/docs/example.pdf',
+        relativePath: 'example',
+        pdfSplitSource: {
+          relativePath: 'example/.source/example.pdf',
+          sourceName: 'example.pdf',
+          totalPages: 31
+        }
+      })
+    ).toMatchObject({ pdfSplitSource: { totalPages: 31 } })
+
+    expect(
+      KnowledgeItemDataSchema.parse({
+        source: 'example_0001-0030.pdf',
+        relativePath: 'example/example_0001-0030.pdf',
+        pdfPart: { partIndex: 1, pageStart: 1, pageEnd: 30 }
+      })
+    ).toMatchObject({ pdfPart: { pageStart: 1, pageEnd: 30 } })
+  })
+
+  it('accepts an aggregate split confirmation result', () => {
+    expect(
+      KnowledgeAddItemsResultSchema.parse({
+        status: 'split_confirmation_required',
+        confirmation: {
+          token: 'token',
+          expiresAt: '2026-08-10T09:00:00.000Z',
+          processorId: 'doc2x',
+          files: [
+            {
+              sourceName: 'example.pdf',
+              pageCount: 31,
+              sourceBytes: 1024,
+              parts: [
+                { pageStart: 1, pageEnd: 30, bytes: 700 },
+                { pageStart: 31, pageEnd: 31, bytes: 300 }
+              ]
+            }
+          ],
+          totalTasks: 2,
+          estimatedDiskBytes: 4096
+        }
+      }).status
+    ).toBe('split_confirmation_required')
   })
 })
 

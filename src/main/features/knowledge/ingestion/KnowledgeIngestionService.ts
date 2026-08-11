@@ -1,10 +1,13 @@
 import '../tasks/jobTypes'
 
+import path from 'node:path'
+
 import { application } from '@application'
 import { knowledgeBaseService } from '@data/services/KnowledgeBaseService'
 import { knowledgeItemService } from '@data/services/KnowledgeItemService'
 import { loggerService } from '@logger'
 import type { KeyedMutex } from '@main/core/concurrency/KeyedMutex'
+import { nextFreeKnowledgeRelativePath } from '@main/utils/knowledge'
 import { getFileExt } from '@main/utils/legacyFile'
 import { DataApiErrorFactory } from '@shared/data/api/errors'
 import type { UpdateKnowledgeBaseDto } from '@shared/data/api/schemas/knowledges'
@@ -18,7 +21,9 @@ import {
   type KnowledgeAddItemsResult,
   type KnowledgeBase,
   type KnowledgeItem,
-  type KnowledgeItemStatus
+  type KnowledgeItemOf,
+  type KnowledgeItemStatus,
+  type KnowledgeReindexItemsResult
 } from '@shared/data/types/knowledge'
 import { knowledgeSupportedFileExts } from '@shared/utils/file'
 
@@ -36,6 +41,7 @@ import {
   reserveImportedFileRelativePath
 } from '../pathStorage'
 import { planKnowledgeItemSource } from '../pipeline/sources/sourcePlanning'
+import { deleteKnowledgeItemVectors } from '../pipeline/vectorstore/vectorCleanup'
 import { cancelActiveKnowledgeJobs, cancelJobOrThrow } from '../tasks/utils/cancel'
 import {
   type KnowledgeBaseId,
@@ -51,12 +57,14 @@ import {
   toKnowledgeItemIds
 } from '../types'
 import { resolveKnowledgeAddConflicts } from './addConflicts'
+import { pdfSplitService } from './pdfSplit/PdfSplitService'
+import type { PdfSplitBundle, StagedPdfSplit } from './pdfSplit/types'
 import { markUnscheduledKnowledgeItemsFailed } from './statusCleanup'
 import { purgeKnowledgeSubtreeWithinLock } from './subtreePurge'
 
 const logger = loggerService.withContext('Knowledge:IngestionService')
 // Keep poll jobs delayed enough to avoid hot-looping while remote processors are still working.
-const FILE_PROCESSING_CHECK_DELAY_MS = 5_000
+const FILE_PROCESSING_PENDING_CHECK_DELAYS_MS = [15_000, 30_000, 60_000, 120_000, 5 * 60_000] as const
 const KNOWLEDGE_SUPPORTED_FILE_EXT_SET = new Set<string>(knowledgeSupportedFileExts)
 const REINDEX_ALLOWED_STATUSES = new Set<KnowledgeItemStatus>(['completed', 'failed'])
 const DELETE_RECOVERY_ROOT_CHUNK_SIZE = 500
@@ -73,7 +81,13 @@ export interface KnowledgeItemScheduler {
     baseId: KnowledgeBaseId,
     itemId: KnowledgeItemId,
     fileProcessingJobId: string,
-    options: { pollRound: number; firstScheduledAt: number; parentJobId: string | null; processedRelativePath: string }
+    options: {
+      pollRound: number
+      firstScheduledAt: number
+      parentJobId: string | null
+      processedRelativePath: string
+      delayMs?: number
+    }
   ): Promise<void>
 }
 
@@ -84,7 +98,8 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
   async addItems(
     baseId: string,
     inputs: KnowledgeAddItemInput[],
-    conflictStrategy: KnowledgeAddConflictStrategy = DEFAULT_KNOWLEDGE_ADD_CONFLICT_STRATEGY
+    conflictStrategy: KnowledgeAddConflictStrategy = DEFAULT_KNOWLEDGE_ADD_CONFLICT_STRATEGY,
+    splitConfirmationToken?: string
   ): Promise<KnowledgeAddItemsResult> {
     const base = assertBaseCanRunRuntimeOperation(baseId, 'addItems')
 
@@ -96,6 +111,7 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
     // auto-rename on collision. detect/replace first resolve same-name conflicts
     // against the existing root items and earlier items in the same batch.
     let itemsToAdd = inputs
+    let conflictingExistingRootIds: string[] = []
     if (conflictStrategy !== 'rename') {
       const existingRoots = knowledgeItemService.getRootItemsByBaseId(base.id)
       const resolution = resolveKnowledgeAddConflicts(inputs, existingRoots)
@@ -111,17 +127,40 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
         // index/prepare handlers take this same base lock, so cancelling while
         // holding it would deadlock.
         itemsToAdd = resolution.keptInputs
-        if (resolution.conflictingExistingRootIds.length > 0) {
-          await cancelActiveKnowledgeJobs(base.id, 'knowledge-add-replace', {
-            rootItemIds: resolution.conflictingExistingRootIds,
-            onCancelTimeout: 'throw'
-          })
+        conflictingExistingRootIds = resolution.conflictingExistingRootIds
+      }
+    }
+
+    let splitBundle: PdfSplitBundle | null = null
+    if (base.fileProcessorId) {
+      const processorId = FileProcessorIdSchema.parse(base.fileProcessorId)
+      const splitRequest = { baseId: base.id, processorId, inputs: itemsToAdd, conflictStrategy }
+      if (splitConfirmationToken) {
+        splitBundle = await pdfSplitService.confirmAdd(splitRequest, splitConfirmationToken)
+      } else {
+        const confirmation = await pdfSplitService.preflightAdd(splitRequest)
+        if (confirmation) {
+          return { status: 'split_confirmation_required', confirmation }
         }
       }
     }
 
+    if (conflictingExistingRootIds.length > 0) {
+      try {
+        await cancelActiveKnowledgeJobs(base.id, 'knowledge-add-replace', {
+          rootItemIds: conflictingExistingRootIds,
+          onCancelTimeout: 'throw'
+        })
+      } catch (error) {
+        if (splitBundle) await pdfSplitService.discard(splitBundle.token)
+        throw error
+      }
+    }
+
     const acceptedItems: KnowledgeItem[] = []
+    const schedulingItems: KnowledgeItem[] = []
     const copiedFileItems: Array<Pick<CreateKnowledgeItemDto, 'type' | 'data'>> = []
+    const boundDirectoryItemIds: string[] = []
 
     await this.knowledgeLockManager.runExclusive(base.id, async () => {
       try {
@@ -137,7 +176,32 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
         // against the same growing set, so a same-named batch add no longer
         // throws — earlier inputs are visible when deduping later ones.
         const reservedPaths = this.loadReservedKnowledgeFilePaths(base.id, base.fileProcessorId)
-        for (const input of itemsToAdd) {
+        for (const [inputIndex, input] of itemsToAdd.entries()) {
+          const directSplit = splitBundle?.splits.find(
+            (split) => split.owner.kind === 'add-file' && split.owner.inputIndex === inputIndex
+          )
+          if (directSplit && input.type === 'file') {
+            const relativePrefix = reservePdfSplitDirectoryRelativePath(input.data.path, reservedPaths)
+            const published = await pdfSplitService.publishStagedSplit(base.id, directSplit, relativePrefix)
+            const created = knowledgeItemService.createPdfSplitSubtree(base.id, {
+              groupId: input.groupId,
+              data: {
+                source: input.data.source,
+                relativePath: relativePrefix,
+                pdfSplitSource: {
+                  relativePath: published.sourceRelativePath,
+                  sourceName: path.basename(input.data.path),
+                  totalPages: directSplit.pageCount
+                }
+              },
+              parts: toPdfPartData(published.parts)
+            })
+            acceptedItems.push(created.parent)
+            schedulingItems.push(...created.parts)
+            copiedFileItems.push(created.parent)
+            continue
+          }
+
           const createInput = await this.prepareRuntimeAddItemInput(base.id, base.fileProcessorId, input, reservedPaths)
           // A url restore copies its snapshot to raw/{relativePath} under type 'url',
           // so track it for rollback too — otherwise a mid-batch failure orphans the
@@ -148,6 +212,14 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
           }
           const createdItem = knowledgeItemService.createActive(base.id, createInput)
           acceptedItems.push(createdItem)
+          schedulingItems.push(createdItem)
+          const directorySplits = splitBundle?.splits.filter(
+            (split) => split.owner.kind === 'add-directory' && split.owner.inputIndex === inputIndex
+          )
+          if (createdItem.type === 'directory' && directorySplits?.length) {
+            await pdfSplitService.bindDirectorySplits(createdItem.id, directorySplits)
+            boundDirectoryItemIds.push(createdItem.id)
+          }
         }
       } catch (error) {
         this.rollbackAcceptedItems(base.id, acceptedItems, error)
@@ -157,18 +229,29 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
           baseId: base.id,
           addError: error instanceof Error ? error.message : String(error)
         })
+        await Promise.all(boundDirectoryItemIds.map((itemId) => pdfSplitService.discardDirectorySplits(itemId)))
+        if (splitBundle) await pdfSplitService.discard(splitBundle.token)
         throw error
       }
     })
 
+    if (splitBundle) {
+      await pdfSplitService.discard(splitBundle.token)
+    }
+
     const completedSchedulingItemIds = new Set<string>()
     try {
-      for (const item of acceptedItems) {
+      for (const item of schedulingItems) {
         await this.scheduleItem(toKnowledgeBaseId(item.baseId), toKnowledgeItemId(item.id))
         completedSchedulingItemIds.add(item.id)
       }
     } catch (error) {
-      this.markUnscheduledAcceptedItemsFailed(base.id, acceptedItems, completedSchedulingItemIds, error)
+      this.markUnscheduledAcceptedItemsFailed(base.id, schedulingItems, completedSchedulingItemIds, error)
+      await Promise.all(
+        boundDirectoryItemIds
+          .filter((itemId) => !completedSchedulingItemIds.has(itemId))
+          .map((itemId) => pdfSplitService.discardDirectorySplits(itemId))
+      )
       throw error
     }
 
@@ -200,6 +283,16 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
       return
     }
 
+    const rootItems = knowledgeItemService
+      .getSubtreeItems(baseId, rootItemIds, { includeRoots: true })
+      .filter((item) => rootItemIds.includes(item.id))
+    if (rootItems.some((item) => item.type === 'file' && item.data.pdfPart)) {
+      throw DataApiErrorFactory.validation(
+        { item: ['Managed PDF parts cannot be deleted individually'] },
+        'Delete the split PDF directory to remove all of its parts'
+      )
+    }
+
     knowledgeBaseService.getById(baseId)
     const knowledgeBaseId = toKnowledgeBaseId(baseId)
     const knowledgeRootItemIds = toKnowledgeItemIds(rootItemIds)
@@ -219,27 +312,87 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
     )
   }
 
-  async reindexItems(baseId: string, itemIds: string[]): Promise<void> {
-    assertBaseCanRunRuntimeOperation(baseId, 'reindexItems')
+  async reindexItems(
+    baseId: string,
+    itemIds: string[],
+    splitConfirmationToken?: string,
+    skipPdfSplitPreflight = false
+  ): Promise<KnowledgeReindexItemsResult> {
+    const base = assertBaseCanRunRuntimeOperation(baseId, 'reindexItems')
     const rootItemIds = knowledgeItemService.getOutermostSelectedItemIds(baseId, itemIds)
     if (rootItemIds.length === 0) {
-      return
+      return { status: 'scheduled' }
     }
 
     await this.assertSubtreesCanReindex(baseId, rootItemIds)
 
-    knowledgeBaseService.getById(baseId)
-    const knowledgeBaseId = toKnowledgeBaseId(baseId)
-    const knowledgeRootItemIds = toKnowledgeItemIds(rootItemIds)
-    const jobManager = application.get('JobManager')
-    jobManager.enqueue(
-      'knowledge.reindex-subtree',
-      { baseId, rootItemIds },
-      {
-        idempotencyKey: knowledgeReindexSubtreeIdempotencyKey(knowledgeBaseId, knowledgeRootItemIds),
-        queue: knowledgeQueueName(knowledgeBaseId)
+    const selectedSubtree = knowledgeItemService.getSubtreeItems(baseId, rootItemIds, { includeRoots: true })
+    const rootItems = selectedSubtree.filter((item) => rootItemIds.includes(item.id))
+    let splitBundle: PdfSplitBundle | null = null
+    if (base.fileProcessorId && !skipPdfSplitPreflight) {
+      const processorId = FileProcessorIdSchema.parse(base.fileProcessorId)
+      const splitRequest = { baseId, processorId, rootItems }
+      if (splitConfirmationToken) {
+        splitBundle = await pdfSplitService.confirmReindex(splitRequest, splitConfirmationToken)
+      } else {
+        const confirmation = await pdfSplitService.preflightReindex(splitRequest)
+        if (confirmation) return { status: 'split_confirmation_required', confirmation }
       }
-    )
+    }
+
+    const convertedRootIds = new Set<string>()
+    const boundDirectoryItemIds: string[] = []
+    try {
+      if (splitBundle) {
+        const directorySplitsByItemId = new Map<string, StagedPdfSplit[]>()
+        for (const split of splitBundle.splits) {
+          if (split.owner.kind === 'reindex-directory') {
+            const existing = directorySplitsByItemId.get(split.owner.itemId) ?? []
+            existing.push(split)
+            directorySplitsByItemId.set(split.owner.itemId, existing)
+          }
+        }
+        for (const [itemId, splits] of directorySplitsByItemId) {
+          await pdfSplitService.bindDirectorySplits(itemId, splits)
+          boundDirectoryItemIds.push(itemId)
+        }
+
+        const fileConversions = splitBundle.splits.filter(
+          (split): split is StagedPdfSplit & { owner: { kind: 'reindex-file'; itemId: string } } =>
+            split.owner.kind === 'reindex-file'
+        )
+        for (const split of fileConversions) {
+          const item = rootItems.find(
+            (candidate): candidate is KnowledgeItemOf<'file'> =>
+              candidate.id === split.owner.itemId && candidate.type === 'file'
+          )
+          if (!item) throw new Error(`PDF reindex source item not found: ${split.owner.itemId}`)
+          await this.convertFileToPdfSplit(base, item, split)
+          convertedRootIds.add(item.id)
+        }
+        await pdfSplitService.discard(splitBundle.token)
+      }
+
+      const rootsToSchedule = rootItemIds.filter((itemId) => !convertedRootIds.has(itemId))
+      if (rootsToSchedule.length === 0) return { status: 'scheduled' }
+
+      const knowledgeBaseId = toKnowledgeBaseId(baseId)
+      const knowledgeRootItemIds = toKnowledgeItemIds(rootsToSchedule)
+      const jobManager = application.get('JobManager')
+      jobManager.enqueue(
+        'knowledge.reindex-subtree',
+        { baseId, rootItemIds: rootsToSchedule },
+        {
+          idempotencyKey: knowledgeReindexSubtreeIdempotencyKey(knowledgeBaseId, knowledgeRootItemIds),
+          queue: knowledgeQueueName(knowledgeBaseId)
+        }
+      )
+      return { status: 'scheduled' }
+    } catch (error) {
+      await Promise.all(boundDirectoryItemIds.map((itemId) => pdfSplitService.discardDirectorySplits(itemId)))
+      if (splitBundle) await pdfSplitService.discard(splitBundle.token)
+      throw error
+    }
   }
 
   /**
@@ -256,20 +409,46 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
    */
   async enableEmbeddingModel(baseId: string, patch: UpdateKnowledgeBaseDto): Promise<KnowledgeBase> {
     const rootItems = knowledgeItemService.getRootItemsByBaseId(baseId).filter((item) => item.status !== 'deleting')
-    const rootItemIds = rootItems.map((item) => item.id)
+    const reindexItemIds = rootItems.flatMap((item) =>
+      item.type === 'directory' && item.data.pdfSplitSource
+        ? knowledgeItemService
+            .getSubtreeItems(baseId, [item.id])
+            .filter((child) => child.type === 'file' && child.data.pdfPart)
+            .map((child) => child.id)
+        : [item.id]
+    )
 
-    if (rootItemIds.length > 0) {
-      assertBaseCanRunRuntimeOperation(baseId, 'enableEmbeddingModel')
-      await this.assertSubtreesCanReindex(baseId, rootItemIds)
+    if (reindexItemIds.length > 0) {
+      const base = assertBaseCanRunRuntimeOperation(baseId, 'enableEmbeddingModel')
+      await this.assertSubtreesCanReindex(baseId, reindexItemIds)
+      const rootsRequiringPreflight = rootItems.filter((item) => item.type !== 'directory' || !item.data.pdfSplitSource)
+      if (base.fileProcessorId && rootsRequiringPreflight.length > 0) {
+        const confirmation = await pdfSplitService.preflightReindex({
+          baseId,
+          processorId: FileProcessorIdSchema.parse(base.fileProcessorId),
+          rootItems: rootsRequiringPreflight
+        })
+        if (confirmation) {
+          await pdfSplitService.discard(confirmation.token)
+          throw DataApiErrorFactory.invalidOperation(
+            'enableEmbeddingModel',
+            'Large PDF sources must be split from the data source list before enabling an embedding model'
+          )
+        }
+      }
     }
 
     const updatedBase = knowledgeBaseService.update(baseId, patch, { allowEmbeddingModelBackfill: true })
 
-    if (rootItemIds.length > 0) {
-      await this.reindexItems(baseId, rootItemIds)
+    if (reindexItemIds.length > 0) {
+      await this.reindexItems(baseId, reindexItemIds, undefined, true)
     }
 
     return updatedBase
+  }
+
+  async discardSplitConfirmation(token: string): Promise<void> {
+    await pdfSplitService.discard(token)
   }
 
   async scheduleItem(
@@ -361,9 +540,18 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
     baseId: KnowledgeBaseId,
     itemId: KnowledgeItemId,
     fileProcessingJobId: string,
-    options: { pollRound: number; firstScheduledAt: number; parentJobId: string | null; processedRelativePath: string }
+    options: {
+      pollRound: number
+      firstScheduledAt: number
+      parentJobId: string | null
+      processedRelativePath: string
+      delayMs?: number
+    }
   ): Promise<void> {
     const { pollRound, firstScheduledAt, parentJobId, processedRelativePath } = options
+    const delayMs =
+      options.delayMs ??
+      FILE_PROCESSING_PENDING_CHECK_DELAYS_MS[Math.min(pollRound, FILE_PROCESSING_PENDING_CHECK_DELAYS_MS.length - 1)]
     const jobManager = application.get('JobManager')
     jobManager.enqueue(
       'knowledge.check-file-processing-result',
@@ -379,7 +567,7 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
         idempotencyKey: knowledgeFileProcessingCheckIdempotencyKey(baseId, itemId, fileProcessingJobId, pollRound),
         queue: knowledgeQueueName(baseId),
         parentId: parentJobId ?? undefined,
-        scheduledAt: Date.now() + FILE_PROCESSING_CHECK_DELAY_MS
+        scheduledAt: Date.now() + delayMs
       }
     )
   }
@@ -427,6 +615,36 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
       }
     } catch (error) {
       logger.error('Failed to recover interrupted knowledge items', error as Error)
+    }
+  }
+
+  async cancelInterruptedFileProcessingJobs(): Promise<void> {
+    const jobManager = application.get('JobManager')
+    const activeFileProcessingJobs = await jobManager.list({
+      status: ['pending', 'delayed', 'running'],
+      type: ['file-processing.background', 'file-processing.remote-poll']
+    })
+    const knowledgeLinkedJobIds = activeFileProcessingJobs
+      .filter((job) => {
+        if (!job.input || typeof job.input !== 'object') return false
+        const context = (job.input as { context?: unknown }).context
+        return Boolean(
+          context && typeof context === 'object' && typeof (context as { dataId?: unknown }).dataId === 'string'
+        )
+      })
+      .map((job) => job.id)
+
+    await Promise.all(
+      knowledgeLinkedJobIds.map(async (jobId) => {
+        try {
+          await cancelJobOrThrow(jobId, 'knowledge-startup-recovery')
+        } catch (error) {
+          logger.error('Failed to cancel interrupted knowledge file-processing job', error as Error, { jobId })
+        }
+      })
+    )
+    if (knowledgeLinkedJobIds.length > 0) {
+      logger.info('Cancelled interrupted knowledge file-processing jobs', { count: knowledgeLinkedJobIds.length })
     }
   }
 
@@ -615,6 +833,61 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
     }
   }
 
+  private async convertFileToPdfSplit(
+    base: KnowledgeBase,
+    item: KnowledgeItemOf<'file'>,
+    split: StagedPdfSplit
+  ): Promise<void> {
+    const reservedPaths = this.loadReservedKnowledgeFilePaths(base.id, base.fileProcessorId)
+    for (const ownPath of [item.data.relativePath, item.data.indexedRelativePath]) {
+      if (ownPath) reservedPaths.delete(ownPath)
+    }
+    const relativePrefix = reservePdfSplitDirectoryRelativePath(item.data.relativePath, reservedPaths)
+    const published = await pdfSplitService.publishStagedSplit(base.id, split, relativePrefix)
+    let createdParts: KnowledgeItem[] = []
+    try {
+      await this.knowledgeLockManager.runExclusive(base.id, async () => {
+        await deleteKnowledgeItemVectors(base, [item.id])
+        const replaced = knowledgeItemService.replaceWithPdfSplitSubtree(base.id, item.id, {
+          data: {
+            source: item.data.source,
+            relativePath: relativePrefix,
+            pdfSplitSource: {
+              relativePath: published.sourceRelativePath,
+              sourceName: path.basename(item.data.relativePath),
+              totalPages: split.pageCount
+            }
+          },
+          parts: toPdfPartData(published.parts)
+        })
+        createdParts = replaced.parts
+        await deleteKnowledgeItemFilesBestEffort(base.id, [item], {
+          baseId: base.id,
+          itemId: item.id,
+          reason: 'pdf-split-conversion'
+        })
+      })
+    } catch (error) {
+      await deleteKnowledgeItemFilesBestEffort(
+        base.id,
+        [{ type: 'directory', data: { source: item.data.source, relativePath: relativePrefix } }],
+        { baseId: base.id, itemId: item.id, reason: 'pdf-split-conversion-rollback' }
+      )
+      throw error
+    }
+
+    const scheduledPartIds = new Set<string>()
+    try {
+      for (const part of createdParts) {
+        await this.scheduleItem(toKnowledgeBaseId(base.id), toKnowledgeItemId(part.id))
+        scheduledPartIds.add(part.id)
+      }
+    } catch (error) {
+      this.markUnscheduledAcceptedItemsFailed(base.id, createdParts, scheduledPartIds, error)
+      throw error
+    }
+  }
+
   private loadReservedKnowledgeFilePaths(baseId: string, fileProcessorId: string | null | undefined): Set<string> {
     const items = knowledgeItemService.getItemsByBaseId(baseId)
     return collectKnowledgeReservedRelativePaths(items, { fileProcessorId })
@@ -650,6 +923,36 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
       logMessage: 'Failed to mark unscheduled knowledge item after addItems scheduling failure'
     })
   }
+}
+
+function reservePdfSplitDirectoryRelativePath(sourcePath: string, reservedPaths: Set<string>): string {
+  const sourceName = path.basename(sourcePath)
+  const proposed = path.parse(sourceName).name || 'document'
+  const chosen = nextFreeKnowledgeRelativePath(
+    proposed,
+    (candidate) =>
+      ![...reservedPaths].some(
+        (reserved) =>
+          reserved === candidate || reserved.startsWith(`${candidate}/`) || candidate.startsWith(`${reserved}/`)
+      ),
+    false
+  )
+  reservedPaths.add(chosen)
+  return chosen
+}
+
+function toPdfPartData(
+  parts: Array<{ fileName: string; relativePath: string; pageStart: number; pageEnd: number }>
+): Array<KnowledgeItemOf<'file'>['data']> {
+  return parts.map((part, index) => ({
+    source: part.fileName,
+    relativePath: part.relativePath,
+    pdfPart: {
+      partIndex: index + 1,
+      pageStart: part.pageStart,
+      pageEnd: part.pageEnd
+    }
+  }))
 }
 
 function assertSupportedKnowledgeFilePath(filePath: string): void {

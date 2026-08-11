@@ -10,6 +10,7 @@ import type {
   KnowledgeBase,
   KnowledgeItem,
   KnowledgeItemChunk,
+  KnowledgeReindexItemsResult,
   KnowledgeSearchResult,
   RestoreKnowledgeBaseDto,
   RestoreKnowledgeBaseResult
@@ -19,6 +20,7 @@ import type { AbsoluteFilePath } from '@shared/types/file'
 import { KnowledgeBaseAdminService } from './base/KnowledgeBaseAdminService'
 import type { OrphanBaseArtifactsInspection } from './base/orphanBaseArtifacts'
 import { KnowledgeIngestionService } from './ingestion/KnowledgeIngestionService'
+import { pdfSplitService } from './ingestion/pdfSplit/PdfSplitService'
 import type {
   KnowledgeConceptContent,
   KnowledgeConceptGrep,
@@ -67,9 +69,21 @@ export class KnowledgeService extends BaseService {
     )
   }
 
+  protected async onReady(): Promise<void> {
+    await pdfSplitService.cleanupAll()
+    this.registerInterval(() => {
+      void pdfSplitService.cleanupExpired()
+    }, 60_000)
+  }
+
   protected async onAllReady(): Promise<void> {
     this.ingestionService.recoverDeletingItems()
+    await this.ingestionService.cancelInterruptedFileProcessingJobs()
     this.ingestionService.recoverInterruptedItems()
+  }
+
+  protected async onStop(): Promise<void> {
+    await pdfSplitService.cleanupAll()
   }
 
   async createBase(dto: CreateKnowledgeBaseDto): Promise<KnowledgeBase> {
@@ -104,17 +118,26 @@ export class KnowledgeService extends BaseService {
   async addItems(
     baseId: string,
     items: KnowledgeAddItemInput[],
-    conflictStrategy?: KnowledgeAddConflictStrategy
+    conflictStrategy?: KnowledgeAddConflictStrategy,
+    splitConfirmationToken?: string
   ): Promise<KnowledgeAddItemsResult> {
-    return await this.ingestionService.addItems(baseId, items, conflictStrategy)
+    return await this.ingestionService.addItems(baseId, items, conflictStrategy, splitConfirmationToken)
   }
 
   async deleteItems(baseId: string, itemIds: string[]): Promise<void> {
     await this.ingestionService.deleteItems(baseId, itemIds)
   }
 
-  async reindexItems(baseId: string, itemIds: string[]): Promise<void> {
-    await this.ingestionService.reindexItems(baseId, itemIds)
+  async reindexItems(
+    baseId: string,
+    itemIds: string[],
+    splitConfirmationToken?: string
+  ): Promise<KnowledgeReindexItemsResult> {
+    return await this.ingestionService.reindexItems(baseId, itemIds, splitConfirmationToken)
+  }
+
+  async discardSplitConfirmation(token: string): Promise<void> {
+    await this.ingestionService.discardSplitConfirmation(token)
   }
 
   /** Configure an embedding model on a BM25-only base and backfill embeddings in place (see KnowledgeIngestionService.enableEmbeddingModel). */

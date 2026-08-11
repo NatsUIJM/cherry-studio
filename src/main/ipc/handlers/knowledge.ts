@@ -20,13 +20,19 @@ export const knowledgeHandlers: IpcHandlersFor<typeof knowledgeRequestSchemas> =
   'knowledge.delete_base': async ({ baseId }) => {
     await application.get('KnowledgeService').deleteBase(baseId)
   },
-  'knowledge.add_items': async ({ baseId, items, conflictStrategy }) =>
-    application.get('KnowledgeService').addItems(baseId, items, conflictStrategy),
+  'knowledge.add_items': async ({ baseId, items, conflictStrategy, splitConfirmationToken }) =>
+    splitConfirmationToken
+      ? application.get('KnowledgeService').addItems(baseId, items, conflictStrategy, splitConfirmationToken)
+      : application.get('KnowledgeService').addItems(baseId, items, conflictStrategy),
   'knowledge.delete_items': async ({ baseId, itemIds }) => {
     await application.get('KnowledgeService').deleteItems(baseId, itemIds)
   },
-  'knowledge.reindex_items': async ({ baseId, itemIds }) => {
-    await application.get('KnowledgeService').reindexItems(baseId, itemIds)
+  'knowledge.reindex_items': async ({ baseId, itemIds, splitConfirmationToken }) =>
+    splitConfirmationToken
+      ? application.get('KnowledgeService').reindexItems(baseId, itemIds, splitConfirmationToken)
+      : application.get('KnowledgeService').reindexItems(baseId, itemIds),
+  'knowledge.discard_split_confirmation': async ({ token }) => {
+    await application.get('KnowledgeService').discardSplitConfirmation(token)
   },
   'knowledge.enable_embedding_model': async ({ baseId, patch }) =>
     application.get('KnowledgeService').enableEmbeddingModel(baseId, patch),

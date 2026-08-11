@@ -157,7 +157,13 @@ export class KnowledgeBaseAdminService {
     const inputs = restorableRootItems.map((item) => this.toRestoreRuntimeInput(sourceBase.id, item))
     const restoredBase = await this.createBase(createDto)
     try {
-      await this.ingestionService.addItems(restoredBase.id, inputs)
+      const result = await this.ingestionService.addItems(restoredBase.id, inputs)
+      if (result.status === 'split_confirmation_required') {
+        await this.ingestionService.discardSplitConfirmation(result.confirmation.token)
+        throw new Error(
+          'Large PDF sources must be restored from the data source list so their split plan can be confirmed'
+        )
+      }
     } catch (error) {
       try {
         await this.deleteBase(restoredBase.id)
@@ -238,6 +244,16 @@ export class KnowledgeBaseAdminService {
           // source of truth and re-capturing it into the new base on first index is
           // free and deterministic, so there is no snapshot file to carry across.
           data: { source: item.data.source, content: item.data.content }
+        })
+      }
+
+      if (item.type === 'directory' && item.data.pdfSplitSource) {
+        return KnowledgeAddItemInputSchema.parse({
+          type: 'file',
+          data: {
+            source: item.data.source,
+            path: getKnowledgeBaseFilePath(sourceBaseId, item.data.pdfSplitSource.relativePath)
+          }
         })
       }
 

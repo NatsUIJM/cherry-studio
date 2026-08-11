@@ -22,13 +22,18 @@ interface DirectoryEntryNode {
 export type ExpandedDirectoryNode =
   | {
       type: 'directory'
-      data: Pick<DirectoryItemData, 'source'>
+      data: DirectoryItemData
       children: ExpandedDirectoryNode[]
     }
   | {
       type: 'file'
-      data: Pick<FileItemData, 'source' | 'relativePath'>
+      data: FileItemData
     }
+
+export interface DirectoryPdfSplitPublisher {
+  hasSplit(sourcePath: string): boolean
+  publish(sourcePath: string, relativePrefix: string, signal: AbortSignal): Promise<ExpandedDirectoryNode>
+}
 
 async function readDirectoryTree(
   dirPath: string,
@@ -78,11 +83,25 @@ async function expandDirectoryNode(
   pathPrefix: string,
   node: DirectoryEntryNode,
   signal: AbortSignal,
-  onFileCopied: () => void
+  onFileCopied: () => void,
+  pdfSplitPublisher: DirectoryPdfSplitPublisher | undefined,
+  pdfSplitRelativePrefixes: Map<string, string>
 ): Promise<ExpandedDirectoryNode | null> {
   if (node.type === 'file') {
     if (!KNOWLEDGE_SUPPORTED_FILE_EXT_SET.has(path.extname(node.externalPath).toLowerCase())) {
       return null
+    }
+
+    const pdfSplitRelativePrefix = pdfSplitRelativePrefixes.get(node.externalPath)
+    if (pdfSplitRelativePrefix && pdfSplitPublisher) {
+      const published = await pdfSplitPublisher.publish(
+        node.externalPath,
+        `${pathPrefix}/${pdfSplitRelativePrefix}`,
+        signal
+      )
+      signal.throwIfAborted()
+      onFileCopied()
+      return published
     }
 
     // Namespace each file under the owner directory's (deduped) basename and keep
@@ -112,7 +131,15 @@ async function expandDirectoryNode(
   const children: ExpandedDirectoryNode[] = []
 
   for (const child of node.children ?? []) {
-    const expandedChild = await expandDirectoryNode(baseId, pathPrefix, child, signal, onFileCopied)
+    const expandedChild = await expandDirectoryNode(
+      baseId,
+      pathPrefix,
+      child,
+      signal,
+      onFileCopied,
+      pdfSplitPublisher,
+      pdfSplitRelativePrefixes
+    )
     if (expandedChild) {
       children.push(expandedChild)
     }
@@ -173,7 +200,8 @@ export async function expandDirectoryOwnerToTree(
   baseId: string,
   pathPrefix: string,
   signal: AbortSignal,
-  onCopyProgress: (percent: number) => void
+  onCopyProgress: (percent: number) => void,
+  pdfSplitPublisher?: DirectoryPdfSplitPublisher
 ): Promise<ExpandedDirectoryNode[]> {
   if (owner.type !== 'directory') {
     throw new Error(`Knowledge item '${owner.id}' must be type 'directory', received '${owner.type}'`)
@@ -181,6 +209,7 @@ export async function expandDirectoryOwnerToTree(
 
   const resolvedPath = path.resolve(owner.data.source)
   const children = await readDirectoryTree(resolvedPath, signal)
+  const pdfSplitRelativePrefixes = choosePdfSplitRelativePrefixes(children, pdfSplitPublisher)
   const expandedChildren: ExpandedDirectoryNode[] = []
   const totalFiles = countSupportedFiles(children)
   let copiedFiles = 0
@@ -193,13 +222,56 @@ export async function expandDirectoryOwnerToTree(
   }
 
   for (const child of children) {
-    const expandedChild = await expandDirectoryNode(baseId, pathPrefix, child, signal, onFileCopied)
+    const expandedChild = await expandDirectoryNode(
+      baseId,
+      pathPrefix,
+      child,
+      signal,
+      onFileCopied,
+      pdfSplitPublisher,
+      pdfSplitRelativePrefixes
+    )
     if (expandedChild) {
       expandedChildren.push(expandedChild)
     }
   }
 
   return expandedChildren
+}
+
+function choosePdfSplitRelativePrefixes(
+  nodes: DirectoryEntryNode[],
+  publisher: DirectoryPdfSplitPublisher | undefined
+): Map<string, string> {
+  const result = new Map<string, string>()
+  if (!publisher) return result
+
+  const reserved = new Set<string>()
+  const stagedFiles: DirectoryEntryNode[] = []
+  const visit = (entries: DirectoryEntryNode[]) => {
+    for (const node of entries) {
+      const subtreePath = node.treePath.replace(/^\/+/, '')
+      if (node.type === 'folder') {
+        reserved.add(subtreePath)
+        visit(node.children ?? [])
+      } else if (publisher.hasSplit(node.externalPath)) {
+        stagedFiles.push(node)
+      } else if (KNOWLEDGE_SUPPORTED_FILE_EXT_SET.has(path.extname(node.externalPath).toLowerCase())) {
+        reserved.add(subtreePath)
+      }
+    }
+  }
+  visit(nodes)
+
+  for (const node of stagedFiles) {
+    const subtreePath = node.treePath.replace(/^\/+/, '')
+    const extension = path.posix.extname(subtreePath)
+    const proposed = subtreePath.slice(0, subtreePath.length - extension.length)
+    const chosen = nextFreeKnowledgeRelativePath(proposed, (candidate) => !reserved.has(candidate), false)
+    reserved.add(chosen)
+    result.set(node.externalPath, chosen)
+  }
+  return result
 }
 
 function countSupportedFiles(nodes: DirectoryEntryNode[]): number {

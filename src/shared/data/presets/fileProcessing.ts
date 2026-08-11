@@ -44,6 +44,9 @@ export const DocumentToMarkdownCapabilitySchema = z
     feature: z.literal('document_to_markdown'),
     inputs: z.array(FileTypeSchema.extract([FILE_TYPE.DOCUMENT])).min(1),
     output: z.literal('markdown'),
+    maxInputBytes: z.number().int().positive(),
+    maxPagesPerPart: z.number().int().positive().optional(),
+    targetPagesPerPart: z.number().int().positive().optional(),
     apiHost: z.string().optional(),
     modelId: z.string().min(1).optional()
   })
@@ -172,6 +175,9 @@ export const FileProcessorMergedSchema = FileProcessorTemplateSchema.extend({
 })
 export type FileProcessorMerged = z.infer<typeof FileProcessorMergedSchema>
 
+const MIB = 1024 * 1024
+const GIB = 1024 * MIB
+
 export const FILE_PROCESSOR_PRESET_MAP = {
   tesseract: {
     type: 'builtin',
@@ -201,6 +207,7 @@ export const FILE_PROCESSOR_PRESET_MAP = {
         feature: 'document_to_markdown',
         inputs: ['document'],
         output: 'markdown',
+        maxInputBytes: 50 * MIB,
         apiHost: 'https://paddleocr.aistudio-app.com/',
         modelId: 'PaddleOCR-VL-1.5'
       }
@@ -212,7 +219,15 @@ export const FILE_PROCESSOR_PRESET_MAP = {
   },
   'local-document': {
     type: 'builtin',
-    capabilities: [{ feature: 'document_to_markdown', inputs: ['document'], output: 'markdown' }]
+    capabilities: [
+      {
+        feature: 'document_to_markdown',
+        inputs: ['document'],
+        output: 'markdown',
+        maxInputBytes: GIB,
+        targetPagesPerPart: 30
+      }
+    ]
   },
   ovocr: {
     type: 'builtin',
@@ -226,6 +241,8 @@ export const FILE_PROCESSOR_PRESET_MAP = {
         feature: 'document_to_markdown',
         inputs: ['document'],
         output: 'markdown',
+        maxInputBytes: 200 * MIB,
+        maxPagesPerPart: 200,
         apiHost: 'https://mineru.net',
         modelId: 'pipeline'
       }
@@ -238,6 +255,8 @@ export const FILE_PROCESSOR_PRESET_MAP = {
         feature: 'document_to_markdown',
         inputs: ['document'],
         output: 'markdown',
+        maxInputBytes: GIB,
+        targetPagesPerPart: 30,
         apiHost: 'https://v2.doc2x.noedgeai.com',
         modelId: 'v3-2026'
       }
@@ -250,6 +269,8 @@ export const FILE_PROCESSOR_PRESET_MAP = {
         feature: 'document_to_markdown',
         inputs: ['document'],
         output: 'markdown',
+        maxInputBytes: 50 * MIB,
+        maxPagesPerPart: 1000,
         apiHost: 'https://api.mistral.ai',
         modelId: 'mistral-ocr-latest'
       },
@@ -269,6 +290,7 @@ export const FILE_PROCESSOR_PRESET_MAP = {
         feature: 'document_to_markdown',
         inputs: ['document'],
         output: 'markdown',
+        maxInputBytes: 200 * MIB,
         apiHost: 'http://127.0.0.1:8000'
       }
     ]

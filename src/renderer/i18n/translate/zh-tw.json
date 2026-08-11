@@ -3124,6 +3124,15 @@
         "end_reached": "沒有更多了",
         "loading_more": "載入更多…"
       },
+      "pdf_split": {
+        "confirm": "[to be translated]:Split and upload",
+        "description": "[to be translated]:These PDFs exceed the safe limit for {{processor}}. Cherry Studio will keep the originals and upload each part as an independent knowledge item.",
+        "disk": "[to be translated]:Required disk space",
+        "file_summary": "[to be translated]:{{pages}} pages · {{size}} · {{parts}} parts",
+        "files": "[to be translated]:PDF files",
+        "tasks": "[to be translated]:Upload tasks",
+        "title": "[to be translated]:Split large PDF files"
+      },
       "preview": {
         "failed": "預覽原文失敗",
         "unavailable": "目前資料來源沒有可預覽的原文"
@@ -3135,7 +3144,9 @@
         "embedding": "嵌入中",
         "error": "錯誤",
         "pending": "等待中",
-        "ready": "就緒"
+        "provider_timeout": "[to be translated]:Provider timed out",
+        "ready": "就緒",
+        "size_exceeded": "[to be translated]:Exceeds {{limit}}"
       },
       "table": {
         "aria_label": "資料來源清單",

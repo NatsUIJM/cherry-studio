@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import AddKnowledgeItemDialog from '../AddKnowledgeItemDialog'
 
 const mockSubmitKnowledgeItems = vi.fn()
+const mockDiscardKnowledgePdfSplitConfirmation = vi.fn()
 const mockUseKnowledgePage = vi.fn()
 const mockUseAddKnowledgeItems = vi.fn()
 const mockFileSelect = vi.fn()
@@ -35,6 +36,7 @@ vi.mock('../../KnowledgePageProvider', () => ({
 }))
 
 vi.mock('@renderer/hooks/useKnowledgeItems', () => ({
+  discardKnowledgePdfSplitConfirmation: (...args: unknown[]) => mockDiscardKnowledgePdfSplitConfirmation(...args),
   useAddKnowledgeItems: (...args: unknown[]) => mockUseAddKnowledgeItems(...args)
 }))
 
@@ -89,6 +91,7 @@ vi.mock('@cherrystudio/ui', async () => {
   return {
     Button: ({
       children,
+      loading,
       type = 'button',
       ...props
     }: {
@@ -97,7 +100,7 @@ vi.mock('@cherrystudio/ui', async () => {
       type?: 'button' | 'submit' | 'reset'
       [key: string]: unknown
     }) => (
-      <button type={type} {...props}>
+      <button type={type} aria-busy={loading || undefined} {...props}>
         {children}
       </button>
     ),
@@ -216,7 +219,17 @@ vi.mock('@cherrystudio/ui', async () => {
 vi.mock('react-i18next', () => {
   // A single stable `t` reference (like the real react-i18next), so effects that depend
   // on `t` are not re-triggered every render.
-  const t = (key: string, options?: { count?: number; defaultValue?: string; file_types?: string }) => {
+  const t = (
+    key: string,
+    options?: {
+      count?: number
+      defaultValue?: string
+      file_types?: string
+      pages?: number
+      parts?: number
+      size?: string
+    }
+  ) => {
     const translations = {
       'common.add': '添加',
       'common.cancel': '取消',
@@ -248,7 +261,15 @@ vi.mock('react-i18next', () => {
       'knowledge.data_source.add_dialog.unsupported_files_skipped': `已跳过 ${options?.count ?? 0} 个不支持的文件`,
       'knowledge.data_source.add_dialog.url.description': '输入网页链接：',
       'knowledge.data_source.add_dialog.url.help': '将自动抓取页面文本并分块索引',
-      'knowledge.data_source.add_dialog.url.placeholder': 'https://example.com'
+      'knowledge.data_source.add_dialog.url.placeholder': 'https://example.com',
+      'knowledge.data_source.pdf_split.confirm': '拆分并上传',
+      'knowledge.data_source.pdf_split.description': '这些 PDF 超出 Doc2X 的稳定处理范围。',
+      'knowledge.data_source.pdf_split.disk': '所需磁盘空间',
+      'knowledge.data_source.pdf_split.file_summary': `${options?.pages ?? 0} 页 · ${options?.size ?? ''} · ${options?.parts ?? 0} 个分片`,
+      'knowledge.data_source.pdf_split.files': 'PDF 文件',
+      'knowledge.data_source.pdf_split.tasks': '上传任务',
+      'knowledge.data_source.pdf_split.title': '拆分大型 PDF 文件',
+      'provider.doc2x': 'Doc2X'
     } satisfies Record<string, string>
 
     return translations[key] ?? options?.defaultValue ?? key
@@ -267,6 +288,7 @@ describe('AddKnowledgeItemDialog', () => {
       error: undefined
     })
     mockSubmitKnowledgeItems.mockResolvedValue({ status: 'added' })
+    mockDiscardKnowledgePdfSplitConfirmation.mockResolvedValue(undefined)
     // Default: picker cancelled, so a render that does not arrange a selection just closes.
     mockFileSelect.mockResolvedValue(null)
     mockSelectFolder.mockResolvedValue(null)
@@ -401,6 +423,47 @@ describe('AddKnowledgeItemDialog', () => {
       await waitFor(() => {
         expect(onOpenChange).toHaveBeenCalledWith(false)
       })
+    })
+
+    it('shows the split plan and confirms the same upload with its token', async () => {
+      const confirmation = createPdfSplitConfirmation()
+      mockFileSelect.mockResolvedValueOnce([createSelectedFile('alpha.pdf', '/docs/alpha.pdf')])
+      mockSubmitKnowledgeItems
+        .mockResolvedValueOnce({ status: 'split_confirmation_required', confirmation })
+        .mockResolvedValueOnce({ status: 'added' })
+      const onOpenChange = vi.fn()
+      render(<AddKnowledgeItemDialog open onOpenChange={onOpenChange} />)
+
+      expect(await screen.findByRole('heading', { name: '拆分大型 PDF 文件' })).toBeInTheDocument()
+      expect(screen.getByText('alpha.pdf')).toBeInTheDocument()
+      expect(screen.getByText('31 页 · 1.0 MB · 2 个分片')).toBeInTheDocument()
+      expect(onOpenChange).not.toHaveBeenCalledWith(false)
+
+      fireEvent.click(screen.getByRole('button', { name: '拆分并上传' }))
+
+      await waitFor(() => {
+        expect(mockSubmitKnowledgeItems).toHaveBeenNthCalledWith(
+          2,
+          [{ type: 'file', data: { source: '/docs/alpha.pdf', path: '/docs/alpha.pdf' } }],
+          'detect',
+          confirmation.token
+        )
+      })
+      await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+    })
+
+    it('discards the split token and adds nothing when confirmation is cancelled', async () => {
+      const confirmation = createPdfSplitConfirmation()
+      mockFileSelect.mockResolvedValueOnce([createSelectedFile('alpha.pdf')])
+      mockSubmitKnowledgeItems.mockResolvedValueOnce({ status: 'split_confirmation_required', confirmation })
+      const onOpenChange = vi.fn()
+      render(<AddKnowledgeItemDialog open onOpenChange={onOpenChange} />)
+
+      fireEvent.click(await screen.findByRole('button', { name: '取消' }))
+
+      expect(mockSubmitKnowledgeItems).toHaveBeenCalledTimes(1)
+      expect(mockDiscardKnowledgePdfSplitConfirmation).toHaveBeenCalledWith(confirmation.token)
+      expect(onOpenChange).toHaveBeenCalledWith(false)
     })
   })
 
@@ -782,3 +845,24 @@ describe('AddKnowledgeItemDialog', () => {
     })
   })
 })
+
+function createPdfSplitConfirmation() {
+  return {
+    token: 'split-token',
+    expiresAt: '2026-08-10T08:10:00.000Z',
+    processorId: 'doc2x',
+    files: [
+      {
+        sourceName: 'alpha.pdf',
+        pageCount: 31,
+        sourceBytes: 1024 * 1024,
+        parts: [
+          { pageStart: 1, pageEnd: 30, bytes: 700_000 },
+          { pageStart: 31, pageEnd: 31, bytes: 100_000 }
+        ]
+      }
+    ],
+    totalTasks: 2,
+    estimatedDiskBytes: 4 * 1024 * 1024
+  }
+}
