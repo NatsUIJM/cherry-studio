@@ -976,6 +976,10 @@
       "executing": "Executing...",
       "expired": "Expired",
       "inputPreview": "Tool input preview",
+      "pdfSplit": {
+        "preparing": "Preparing the PDF split plan…",
+        "retry": "Check again"
+      },
       "pending": "Waiting for confirmation",
       "pendingBadge": "Pending",
       "permissionExpired": "Permission request expired. Waiting for new instructions...",

@@ -18,11 +18,13 @@ import {
   KNOWLEDGE_ITEM_ERROR_INDEXING_INTERRUPTED,
   type KnowledgeAddConflictStrategy,
   type KnowledgeAddItemInput,
+  KnowledgeAddItemInputSchema,
   type KnowledgeAddItemsResult,
   type KnowledgeBase,
   type KnowledgeItem,
   type KnowledgeItemOf,
   type KnowledgeItemStatus,
+  type KnowledgePdfSplitConfirmation,
   type KnowledgeReindexItemsResult
 } from '@shared/data/types/knowledge'
 import { knowledgeSupportedFileExts } from '@shared/utils/file'
@@ -99,6 +101,22 @@ export interface KnowledgeItemScheduler {
 /** Write-side orchestration: admission checks, item creation, conflict handling, and job enqueueing for the add/delete/reindex flows. */
 export class KnowledgeIngestionService implements KnowledgeItemScheduler {
   constructor(private readonly knowledgeLockManager: KeyedMutex) {}
+
+  async preflightPdfSplitAdd(baseId: string, filePath: string): Promise<KnowledgePdfSplitConfirmation | null> {
+    const base = assertBaseCanRunRuntimeOperation(baseId, 'preflightPdfSplitAdd')
+    if (!base.fileProcessorId) return null
+
+    const input = KnowledgeAddItemInputSchema.parse({
+      type: 'file',
+      data: { source: path.basename(filePath), path: filePath }
+    })
+    return await pdfSplitService.preflightAdd({
+      baseId: base.id,
+      processorId: FileProcessorIdSchema.parse(base.fileProcessorId),
+      inputs: [input],
+      conflictStrategy: DEFAULT_KNOWLEDGE_ADD_CONFLICT_STRATEGY
+    })
+  }
 
   async addItems(
     baseId: string,

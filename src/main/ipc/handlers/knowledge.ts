@@ -24,6 +24,8 @@ export const knowledgeHandlers: IpcHandlersFor<typeof knowledgeRequestSchemas> =
     splitConfirmationToken
       ? application.get('KnowledgeService').addItems(baseId, items, conflictStrategy, splitConfirmationToken)
       : application.get('KnowledgeService').addItems(baseId, items, conflictStrategy),
+  'knowledge.preflight_pdf_split_add': async ({ baseId, path }) =>
+    application.get('KnowledgeService').preflightPdfSplitAdd(baseId, path),
   'knowledge.delete_items': async ({ baseId, itemIds }) => {
     await application.get('KnowledgeService').deleteItems(baseId, itemIds)
   },

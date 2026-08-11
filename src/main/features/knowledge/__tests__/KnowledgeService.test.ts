@@ -1250,6 +1250,40 @@ describe('KnowledgeService', () => {
     expect(enqueueMock).not.toHaveBeenCalled()
   })
 
+  it('preflights an AI PDF add without creating rows, copying files, or scheduling work', async () => {
+    const service = new KnowledgeService()
+    const confirmation = {
+      token: 'split-token',
+      expiresAt: '2026-08-10T08:10:00.000Z',
+      processorId: 'doc2x',
+      files: [
+        {
+          sourceName: 'source.pdf',
+          pageCount: 31,
+          sourceBytes: 1024,
+          parts: [{ pageStart: 1, pageEnd: 31, bytes: 1024 }]
+        }
+      ],
+      totalTasks: 1,
+      estimatedDiskBytes: 1024
+    }
+    knowledgeBaseGetByIdMock.mockReturnValue(createBase({ fileProcessorId: 'doc2x' }))
+    pdfSplitPreflightAddMock.mockResolvedValueOnce(confirmation)
+
+    await expect(service.preflightPdfSplitAdd('kb-1', '/docs/source.pdf')).resolves.toBe(confirmation)
+
+    expect(pdfSplitPreflightAddMock).toHaveBeenCalledWith({
+      baseId: 'kb-1',
+      processorId: 'doc2x',
+      inputs: [{ type: 'file', data: { source: 'source.pdf', path: '/docs/source.pdf' } }],
+      conflictStrategy: 'rename'
+    })
+    expect(knowledgeItemCreateActiveMock).not.toHaveBeenCalled()
+    expect(copyFileIntoKnowledgeBaseAtMock).not.toHaveBeenCalled()
+    expect(fileProcessingStartJobMock).not.toHaveBeenCalled()
+    expect(enqueueMock).not.toHaveBeenCalled()
+  })
+
   it('does not cancel a replaced item job before its PDF split is confirmed', async () => {
     const service = new KnowledgeService()
     const existing = createFileItem('existing-file', 'kb-1', '/stored/source.pdf', 'processing')

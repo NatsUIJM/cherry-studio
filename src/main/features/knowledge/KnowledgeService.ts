@@ -10,6 +10,7 @@ import type {
   KnowledgeBase,
   KnowledgeItem,
   KnowledgeItemChunk,
+  KnowledgePdfSplitConfirmation,
   KnowledgeReindexItemsResult,
   KnowledgeSearchResult,
   RestoreKnowledgeBaseDto,
@@ -122,6 +123,10 @@ export class KnowledgeService extends BaseService {
     splitConfirmationToken?: string
   ): Promise<KnowledgeAddItemsResult> {
     return await this.ingestionService.addItems(baseId, items, conflictStrategy, splitConfirmationToken)
+  }
+
+  async preflightPdfSplitAdd(baseId: string, filePath: string): Promise<KnowledgePdfSplitConfirmation | null> {
+    return await this.ingestionService.preflightPdfSplitAdd(baseId, filePath)
   }
 
   async deleteItems(baseId: string, itemIds: string[]): Promise<void> {

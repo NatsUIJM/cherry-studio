@@ -7,6 +7,7 @@ import {
   KnowledgeAddItemsResultSchema,
   KnowledgeBaseSchema,
   KnowledgeItemChunkSchema,
+  KnowledgePdfSplitConfirmationSchema,
   KnowledgeReindexItemsResultSchema,
   KnowledgeSearchResultSchema,
   RestoreKnowledgeBaseResultSchema,
@@ -63,6 +64,10 @@ export const knowledgeRequestSchemas = {
       splitConfirmationToken: z.string().trim().min(1).optional()
     }),
     output: KnowledgeAddItemsResultSchema
+  }),
+  'knowledge.preflight_pdf_split_add': defineRoute({
+    input: z.strictObject({ baseId: baseIdSchema, path: AbsoluteFilePathSchema }),
+    output: KnowledgePdfSplitConfirmationSchema.nullable()
   }),
   'knowledge.delete_items': defineRoute({ input: itemIdsInputSchema, output: z.void() }),
   'knowledge.reindex_items': defineRoute({

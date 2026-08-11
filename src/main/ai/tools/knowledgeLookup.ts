@@ -450,6 +450,7 @@ type ManageKnowledgeInput = {
   url?: string
   content?: string
   title?: string
+  splitConfirmationToken?: string
   conceptIds?: string[]
 }
 
@@ -476,7 +477,9 @@ export async function manageKnowledge(
       case 'add': {
         const built = buildAddInput(input)
         if (!built.ok) return { error: built.error }
-        const result = await service.addItems(input.baseId, [built.input])
+        const result = input.splitConfirmationToken
+          ? await service.addItems(input.baseId, [built.input], undefined, input.splitConfirmationToken)
+          : await service.addItems(input.baseId, [built.input])
         if (result.status === 'split_confirmation_required') {
           await service.discardSplitConfirmation(result.confirmation.token)
           return {
