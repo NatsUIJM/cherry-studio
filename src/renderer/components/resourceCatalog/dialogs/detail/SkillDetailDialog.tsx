@@ -80,7 +80,7 @@ const SkillDetailDialog: FC<Props> = ({ skill, open, onOpenChange }) => {
       <DialogContent className="max-h-[calc(100vh-2rem)] overflow-hidden sm:max-w-2xl">
         <DialogHeader className="pr-8">
           <div className="flex min-w-0 items-start gap-3">
-            <div className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-warning-subtle text-warning">
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-secondary text-secondary-foreground">
               <ToolCase size={22} strokeWidth={1.5} />
             </div>
             <div className="min-w-0 pt-0.5">

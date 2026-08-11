@@ -19,7 +19,7 @@ export const RESOURCE_TYPE_META: Record<ResourceType, ResourceTypeMeta> = {
   },
   skill: {
     icon: ToolCase,
-    color: 'bg-warning-subtle text-warning',
+    color: 'bg-secondary text-secondary-foreground',
     labelKey: 'library.type.skill'
   },
   prompt: {
