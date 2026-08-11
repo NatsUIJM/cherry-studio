@@ -12,7 +12,7 @@ import Scrollbar from '@renderer/components/Scrollbar'
 import { toast } from '@renderer/services/toast'
 import type { McpToolResponse, NormalToolResponse } from '@renderer/types/mcpTool'
 import { cn } from '@renderer/utils/style'
-import { ArrowRight, LoaderCircle, RefreshCw } from 'lucide-react'
+import { ArrowRight, Loader2, LoaderCircle, RefreshCw } from 'lucide-react'
 import { useCallback, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -21,7 +21,7 @@ import type { PermissionRequestComposerRequest } from './permissionRequestCompos
 import { useKnowledgePdfSplitApproval } from './useKnowledgePdfSplitApproval'
 
 export type { PermissionRequestComposerRequest } from './permissionRequestComposerRequest'
-export { findLatestPendingPermissionRequest } from './permissionRequestComposerRequest'
+export { findNextPendingPermissionRequest } from './permissionRequestComposerRequest'
 
 const logger = loggerService.withContext('PermissionRequestComposer')
 
@@ -240,7 +240,8 @@ function PermissionOption({
 
 export default function PermissionRequestComposer({ request, onRespond, className }: PermissionRequestComposerProps) {
   const { t } = useTranslation()
-  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [submittingApprovalId, setSubmittingApprovalId] = useState<string | null>(null)
+  const isSubmitting = submittingApprovalId === request.approvalId
   const pdfSplitApproval = useKnowledgePdfSplitApproval(request)
   const subtitle = getPermissionRequestSubtitle(request)
   const ToolIcon = getToolGroupIcon(request.toolResponse.tool, request.toolResponse.arguments)
@@ -248,17 +249,18 @@ export default function PermissionRequestComposer({ request, onRespond, classNam
 
   const respond = useCallback(
     async (input: MessageToolApprovalInput, action: 'approve' | 'deny') => {
-      setIsSubmitting(true)
+      const approvalId = request.approvalId
+      setSubmittingApprovalId(approvalId)
       try {
         await onRespond(input)
         return true
       } catch (error) {
         logger.error('Failed to send permission response', error as Error, {
           action,
-          approvalId: request.approvalId
+          approvalId
         })
         toast.error(t('agent.toolPermission.error.sendFailed'))
-        setIsSubmitting(false)
+        setSubmittingApprovalId((current) => (current === approvalId ? null : current))
         return false
       }
     },
@@ -281,7 +283,7 @@ export default function PermissionRequestComposer({ request, onRespond, classNam
 
   const deny = useCallback(async () => {
     if (isSubmitting) return
-    setIsSubmitting(true)
+    setSubmittingApprovalId(request.approvalId)
     await pdfSplitApproval.discard()
     await respond(
       {
@@ -291,7 +293,7 @@ export default function PermissionRequestComposer({ request, onRespond, classNam
       },
       'deny'
     )
-  }, [isSubmitting, pdfSplitApproval, request.match, respond, t])
+  }, [isSubmitting, pdfSplitApproval, request.approvalId, request.match, respond, t])
 
   return (
     <div
@@ -314,8 +316,17 @@ export default function PermissionRequestComposer({ request, onRespond, classNam
               <div className="mt-0.5 line-clamp-1 text-muted-foreground text-xs leading-4">{subtitle}</div>
             ) : null}
           </div>
-          <div className="rounded-full border border-warning-border bg-warning-subtle px-2 py-1 font-medium text-[11px] text-warning-subtle-foreground">
-            {t('agent.toolPermission.pending')}
+          <div
+            role="status"
+            aria-live="polite"
+            className={cn(
+              'inline-flex items-center gap-1 rounded-full border px-2 py-1 font-medium text-[11px]',
+              isSubmitting
+                ? 'border-border bg-muted text-muted-foreground'
+                : 'border-warning-border bg-warning-subtle text-warning-subtle-foreground'
+            )}>
+            {isSubmitting ? <Loader2 aria-hidden="true" className="size-3 animate-spin" /> : null}
+            {isSubmitting ? t('message.processing') : t('agent.toolPermission.pending')}
           </div>
         </div>
 
