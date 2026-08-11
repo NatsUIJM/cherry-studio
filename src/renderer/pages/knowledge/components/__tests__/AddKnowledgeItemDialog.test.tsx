@@ -264,10 +264,7 @@ vi.mock('react-i18next', () => {
       'knowledge.data_source.add_dialog.url.placeholder': 'https://example.com',
       'knowledge.data_source.pdf_split.confirm': '拆分并上传',
       'knowledge.data_source.pdf_split.description': '这些 PDF 超出 Doc2X 的稳定处理范围。',
-      'knowledge.data_source.pdf_split.disk': '所需磁盘空间',
       'knowledge.data_source.pdf_split.file_summary': `${options?.pages ?? 0} 页 · ${options?.size ?? ''} · ${options?.parts ?? 0} 个分片`,
-      'knowledge.data_source.pdf_split.files': 'PDF 文件',
-      'knowledge.data_source.pdf_split.tasks': '上传任务',
       'knowledge.data_source.pdf_split.title': '拆分大型 PDF 文件',
       'provider.doc2x': 'Doc2X'
     } satisfies Record<string, string>
@@ -437,9 +434,6 @@ describe('AddKnowledgeItemDialog', () => {
       expect(await screen.findByRole('heading', { name: '拆分大型 PDF 文件' })).toBeInTheDocument()
       expect(screen.getByText('alpha.pdf')).toBeInTheDocument()
       expect(screen.getByText('31 页 · 1.0 MB · 2 个分片')).toBeInTheDocument()
-      expect(screen.queryByText('PDF 文件')).not.toBeInTheDocument()
-      expect(screen.queryByText('上传任务')).not.toBeInTheDocument()
-      expect(screen.queryByText('所需磁盘空间')).not.toBeInTheDocument()
       expect(onOpenChange).not.toHaveBeenCalledWith(false)
 
       fireEvent.click(screen.getByRole('button', { name: '拆分并上传' }))

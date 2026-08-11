@@ -3146,10 +3146,7 @@
       "pdf_split": {
         "confirm": "Split and upload",
         "description": "These PDFs exceed the safe limit for {{processor}}. Cherry Studio will keep the originals and upload each part as an independent knowledge item.",
-        "disk": "Required disk space",
         "file_summary": "{{pages}} pages · {{size}} · {{parts}} parts",
-        "files": "PDF files",
-        "tasks": "Upload tasks",
         "title": "Split large PDF files"
       },
       "preview": {

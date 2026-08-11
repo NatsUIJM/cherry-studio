@@ -3146,10 +3146,7 @@
       "pdf_split": {
         "confirm": "拆分并上传",
         "description": "这些 PDF 超出 {{processor}} 的稳定处理范围。Cherry Studio 将保留原文件，并把每个分片作为独立知识项上传。",
-        "disk": "所需磁盘空间",
         "file_summary": "{{pages}} 页 · {{size}} · {{parts}} 个分片",
-        "files": "PDF 文件",
-        "tasks": "上传任务",
         "title": "拆分大型 PDF 文件"
       },
       "preview": {
