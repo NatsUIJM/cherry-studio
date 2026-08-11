@@ -17,6 +17,7 @@ const mockReadText = vi.hoisted(() => vi.fn())
 const mockUsePlaceholderElapsedMs = vi.hoisted(() => vi.fn(() => 1000))
 const mockToolBlockGroupRender = vi.hoisted(() => vi.fn())
 const mockMessageToolsRender = vi.hoisted(() => vi.fn())
+const mockHtmlArtifactPopupHostRender = vi.hoisted(() => vi.fn())
 
 type MainTextBlockModule = {
   buildUserMessagePreview: (content: string) => { content: string; isTruncated: boolean }
@@ -76,6 +77,13 @@ vi.mock('motion/react', () => {
 
 vi.mock('@renderer/components/ErrorBoundary', () => ({
   ErrorBoundary: ({ children }: any) => <>{children}</>
+}))
+
+vi.mock('@renderer/components/chat/HtmlArtifactPopupContext', () => ({
+  HtmlArtifactPopupHost: ({ children }: { children: React.ReactNode }) => {
+    mockHtmlArtifactPopupHostRender()
+    return <>{children}</>
+  }
 }))
 
 vi.mock('@renderer/components/icons/FallbackFavicon', () => ({
@@ -480,6 +488,7 @@ describe('MessagePartsRenderer', () => {
     mockTopicStreamState.status = undefined
     mockThinkingBlockMounted.mockClear()
     mockMainTextRender.mockClear()
+    mockHtmlArtifactPopupHostRender.mockClear()
     mockReadText.mockReset()
     mockReadText.mockResolvedValue('Pasted text preview')
     Object.defineProperty(window, 'api', {
@@ -495,6 +504,16 @@ describe('MessagePartsRenderer', () => {
     mockUsePlaceholderElapsedMs.mockClear()
     mockToolBlockGroupRender.mockClear()
     mockMessageToolsRender.mockClear()
+  })
+
+  it('owns one HTML artifact popup host for all message text parts', () => {
+    renderParts([
+      { type: 'text', text: 'First' },
+      { type: 'text', text: 'Second' }
+    ] as CherryMessagePart[])
+
+    expect(screen.getAllByTestId('mock-markdown')).toHaveLength(2)
+    expect(mockHtmlArtifactPopupHostRender).toHaveBeenCalledTimes(1)
   })
 
   afterEach(() => {

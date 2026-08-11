@@ -11,7 +11,6 @@ import { useTranslation } from 'react-i18next'
 import type { Components } from 'streamdown'
 import type { Pluggable } from 'unified'
 
-import { HtmlArtifactPopupHost } from '../../HtmlArtifactView'
 import { ChatMarkdownRenderProvider } from './ChatMarkdownRenderContext'
 import { CHAT_MARKDOWN_COMPONENTS, CHAT_MARKDOWN_COMPONENTS_WITH_STYLE } from './ChatMarkdownRenderers'
 import { remarkHtmlArtifact, transformMarkdownOutsideHtmlArtifacts } from './plugins/remarkHtmlArtifact'
@@ -107,7 +106,7 @@ const ChatMarkdown: FC<Props> = ({
       citationRegistry={citationRegistry}
       inlineHtmlPreviewMode={inlineHtmlPreviewMode}
       isStreaming={isStreaming}>
-      {inlineHtmlPreviewMode ? <HtmlArtifactPopupHost>{renderer}</HtmlArtifactPopupHost> : renderer}
+      {renderer}
     </ChatMarkdownRenderProvider>
   )
 }
