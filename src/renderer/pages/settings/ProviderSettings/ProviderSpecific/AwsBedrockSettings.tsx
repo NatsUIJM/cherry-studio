@@ -1,4 +1,4 @@
-import { Input, Label, RadioGroup, RadioGroupItem, RowFlex } from '@cherrystudio/ui'
+import { Input, Label, RadioGroup, RadioGroupItem, RowFlex, SecretInput } from '@cherrystudio/ui'
 import { loggerService } from '@logger'
 import { useProvider, useProviderAuthConfig } from '@renderer/hooks/useProvider'
 import { toast } from '@renderer/services/toast'
@@ -188,9 +188,8 @@ const AwsBedrockSettings: FC<Props> = ({ providerId }) => {
           <ProviderSettingsSubtitle className="mt-4">
             {t('settings.provider.aws-bedrock.secret_access_key')}
           </ProviderSettingsSubtitle>
-          <Input
+          <SecretInput
             className="mt-1.5 w-full"
-            type="password"
             value={localSecretAccessKey}
             placeholder={t('settings.provider.aws-bedrock.secret_access_key')}
             onChange={(e) => {
@@ -199,6 +198,8 @@ const AwsBedrockSettings: FC<Props> = ({ providerId }) => {
             }}
             onBlur={saveIamConfig}
             spellCheck={false}
+            showLabel={t('common.show_credential')}
+            hideLabel={t('common.hide_credential')}
           />
           {apiKeyWebsite && (
             <ProviderHelpTextRow className="justify-between">
@@ -218,14 +219,15 @@ const AwsBedrockSettings: FC<Props> = ({ providerId }) => {
           <ProviderSettingsSubtitle className="mt-4">
             {t('settings.provider.aws-bedrock.api_key')}
           </ProviderSettingsSubtitle>
-          <Input
+          <SecretInput
             className="mt-1.5 w-full"
-            type="password"
             value={inputApiKey}
             placeholder={t('settings.provider.aws-bedrock.api_key')}
             onChange={(e) => setInputApiKey(e.target.value)}
             onBlur={() => void commitInputApiKeyNow()}
             spellCheck={false}
+            showLabel={t('common.show_credential')}
+            hideLabel={t('common.hide_credential')}
           />
           <ProviderHelpTextRow>
             <ProviderHelpText>{t('settings.provider.aws-bedrock.api_key_help')}</ProviderHelpText>

@@ -1,4 +1,4 @@
-import { Button, InfoTooltip, Input, RowFlex, Switch } from '@cherrystudio/ui'
+import { Button, InfoTooltip, Input, RowFlex, SecretInput, Switch } from '@cherrystudio/ui'
 import { usePreference } from '@data/hooks/usePreference'
 import { loggerService } from '@logger'
 import {
@@ -107,13 +107,13 @@ const JoplinSettings: FC = () => {
         </SettingRowTitle>
         <RowFlex className="w-78.75 min-w-0 max-w-full items-center gap-1.25">
           <RowFlex className="w-full min-w-0 items-center gap-1.25">
-            <Input
-              type="password"
+            <SecretInput
               value={joplinToken || ''}
               onChange={handleJoplinTokenChange}
               onBlur={handleJoplinTokenChange}
               placeholder={t('settings.data.joplin.token_placeholder')}
-              style={{ width: '100%' }}
+              showLabel={t('common.show_credential')}
+              hideLabel={t('common.hide_credential')}
             />
             <Button onClick={handleJoplinConnectionCheck} variant="outline" className="h-9 shrink-0">
               {t('settings.data.joplin.check.button')}

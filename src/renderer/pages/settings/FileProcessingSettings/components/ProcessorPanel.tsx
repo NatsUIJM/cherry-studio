@@ -3,6 +3,7 @@ import {
   type ComboboxOption,
   InfoTooltip,
   Input,
+  SecretInput,
   Select,
   SelectContent,
   SelectItem,
@@ -291,14 +292,15 @@ export function ProcessorPanel({
               ) : null}
             </div>
             <div className="flex min-w-0 items-center gap-2">
-              <Input
-                type="password"
+              <SecretInput
                 value={apiKeysInput}
                 onChange={(event) => setApiKeysInput(event.target.value)}
                 onBlur={() => void handleApiKeysBlur()}
                 placeholder={t('settings.tool.file_processing.fields.api_keys_placeholder')}
                 spellCheck={false}
                 className="min-w-0 flex-1"
+                showLabel={t('common.show_credential')}
+                hideLabel={t('common.hide_credential')}
               />
               <Tooltip content={t('settings.provider.api.key.list.open')} delay={500}>
                 <Button

@@ -3,6 +3,7 @@ import {
   InfoTooltip,
   Input,
   Label,
+  SecretInput,
   Select,
   SelectContent,
   SelectItem,
@@ -366,14 +367,15 @@ export const WebSearchProviderSetting: FC<Props> = ({
               )}
             </div>
             <div className="flex min-w-0 items-center gap-2">
-              <Input
-                type="password"
+              <SecretInput
                 value={apiKeysInput}
                 placeholder={t('settings.provider.api_key.label')}
                 onChange={(e) => setApiKeysInput(e.target.value)}
                 onBlur={() => void persist(commitApiKeysDraft, 'Failed to save web search API keys')}
                 spellCheck={false}
                 className="min-w-0 flex-1"
+                showLabel={t('common.show_credential')}
+                hideLabel={t('common.hide_credential')}
               />
               <Tooltip content={t('settings.provider.api.key.list.open')} delay={500}>
                 <Button
@@ -476,13 +478,14 @@ export const WebSearchProviderSetting: FC<Props> = ({
                   <Label htmlFor="websearch-basic-auth-password">
                     {t('settings.provider.basic_auth.password.label')}
                   </Label>
-                  <Input
+                  <SecretInput
                     id="websearch-basic-auth-password"
-                    type="password"
                     value={basicAuthPasswordInput}
                     placeholder={t('settings.provider.basic_auth.password.tip')}
                     onChange={(e) => setBasicAuthPasswordInput(e.target.value)}
                     onBlur={() => void persist(commitBasicAuthDraft, 'Failed to save web search basic auth password')}
+                    showLabel={t('common.show_credential')}
+                    hideLabel={t('common.hide_credential')}
                   />
                 </div>
               )}

@@ -1,4 +1,4 @@
-import { Button, InfoTooltip, Input, RowFlex, Switch, WarnTooltip } from '@cherrystudio/ui'
+import { Button, InfoTooltip, Input, RowFlex, SecretInput, Switch, WarnTooltip } from '@cherrystudio/ui'
 import { usePreference } from '@data/hooks/usePreference'
 import AppLogo from '@renderer/assets/images/logo.png'
 import { S3BackupManager } from '@renderer/components/S3BackupManager'
@@ -162,13 +162,14 @@ const S3Settings: FC = () => {
       <SettingDivider />
       <SettingRow>
         <SettingRowTitle>{t('settings.data.s3.secretAccessKey.label')}</SettingRowTitle>
-        <Input
-          type="password"
+        <SecretInput
           placeholder={t('settings.data.s3.secretAccessKey.placeholder')}
           value={s3SecretAccessKey}
           onChange={(e) => setS3SecretAccessKey(e.target.value)}
-          style={{ width: 250 }}
           onBlur={(e) => setS3SecretAccessKey(e.target.value)}
+          className="w-62.5"
+          showLabel={t('common.show_credential')}
+          hideLabel={t('common.hide_credential')}
         />
       </SettingRow>
       <SettingDivider />
