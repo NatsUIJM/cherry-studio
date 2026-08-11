@@ -7,6 +7,8 @@ import type {
 } from '@shared/data/types/knowledge'
 import type { PosixRelativeFilePath } from '@shared/utils/file'
 
+import type { DirectorySourceManifest } from '../../pipeline/sources/directory'
+
 export interface PdfPageRange {
   pageStart: number
   pageEnd: number
@@ -31,7 +33,10 @@ export interface StagedPdfPart extends PdfPageRange {
 }
 
 export interface StagedPdfSplit {
+  /** External source identity used to match a directory manifest and detect pre-confirm edits. */
   sourcePath: string
+  /** Immutable copy owned by the confirmation token and used for splitting/publishing. */
+  stagedSourcePath: string
   sourceName: string
   sourceBytes: number
   sourceFingerprint: string
@@ -45,6 +50,13 @@ export interface StagedPdfSplit {
     | { kind: 'reindex-directory'; itemId: string }
 }
 
+export interface PdfDirectoryPlan {
+  sourcePath: string
+  manifest: DirectorySourceManifest
+  pdfFingerprints: Array<{ sourcePath: string; fingerprint: string }>
+  owner: { kind: 'add-directory'; inputIndex: number } | { kind: 'reindex-directory'; itemId: string }
+}
+
 export interface PublishedPdfSplit {
   sourceRelativePath: PosixRelativeFilePath
   parts: Array<StagedPdfPart & { fileName: string; relativePath: PosixRelativeFilePath }>
@@ -52,13 +64,20 @@ export interface PublishedPdfSplit {
 
 export interface PdfSplitBundle {
   token: string
-  operation: 'add' | 'reindex'
+  operation: 'add' | 'reindex' | 'restore'
   baseId: string
   requestFingerprint: string
   limitsFingerprint: string
   expiresAt: number
   confirmation: KnowledgePdfSplitConfirmation
   splits: StagedPdfSplit[]
+  directoryPlans: PdfDirectoryPlan[]
+}
+
+export interface PdfSplitRestoreRequest {
+  sourceBaseId: string
+  processorId: FileProcessorId
+  inputs: KnowledgeAddItemInput[]
 }
 
 export interface PdfSplitAddRequest {

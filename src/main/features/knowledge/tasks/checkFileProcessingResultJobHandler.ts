@@ -7,6 +7,7 @@ import type { KeyedMutex } from '@main/core/concurrency/KeyedMutex'
 import type { JobContext, JobHandler } from '@main/core/job/types'
 import { JOB_PROGRESS_KEY_PREFIX } from '@main/core/job/types'
 import {
+  FILE_PROCESSING_JOB_TYPES,
   type FileProcessingJobPayload,
   getFileProcessingFailureMessage,
   getFileProcessingMarkdownArtifactPath
@@ -23,14 +24,7 @@ import { markKnowledgeItemFailedOnSettled } from './utils/settled'
 const logger = loggerService.withContext('Knowledge:CheckFileProcessingResultJobHandler')
 const FILE_PROCESSING_RUNNING_CHECK_DELAY_MS = 5_000
 const FILE_PROCESSING_ITEM_UNAVAILABLE_CANCEL_REASON = 'knowledge-file-processing-item-unavailable'
-// Every job type `FileProcessingService.startJob` can enqueue. Keep in sync with
-// its routing — a missing type here makes the poll below never recognise its own
-// child job, parking the item at `waiting` until the max-wait timer fires.
-const FILE_PROCESSING_JOB_TYPES: ReadonlySet<string> = new Set([
-  'file-processing.background',
-  'file-processing.background-local',
-  'file-processing.remote-poll'
-])
+const FILE_PROCESSING_JOB_TYPE_SET: ReadonlySet<string> = new Set(FILE_PROCESSING_JOB_TYPES)
 
 export function createCheckFileProcessingResultJobHandler(
   knowledgeLockManager: KeyedMutex,
@@ -178,7 +172,7 @@ function reportWaitingProgress(
 }
 
 function isExpectedFileProcessingJob(snapshot: JobSnapshot, itemId: string): boolean {
-  if (!FILE_PROCESSING_JOB_TYPES.has(snapshot.type)) {
+  if (!FILE_PROCESSING_JOB_TYPE_SET.has(snapshot.type)) {
     return false
   }
   if (!snapshot.input || typeof snapshot.input !== 'object') {

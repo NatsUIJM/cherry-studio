@@ -19,13 +19,21 @@ import {
 import type { PosixRelativeFilePath } from '@shared/utils/file'
 
 import { copyFileIntoKnowledgeBaseAt, getKnowledgeBaseFilePath } from '../../pathStorage'
+import {
+  type DirectorySourceManifest,
+  getDirectoryManifestPdfPaths,
+  getSupportedDirectoryManifestPaths,
+  readDirectorySourceManifest
+} from '../../pipeline/sources/directory'
 import { createInitialPdfPageRanges, formatPdfPartFileName, pdfNeedsSplitting } from './pdfSplitPlanning'
 import type {
+  PdfDirectoryPlan,
   PdfInspection,
   PdfSplitAddRequest,
   PdfSplitBundle,
   PdfSplitLimits,
   PdfSplitReindexRequest,
+  PdfSplitRestoreRequest,
   PdfSplitWorkerInput,
   PdfSplitWorkerMessage,
   PublishedPdfSplit,
@@ -42,6 +50,22 @@ interface PdfSourceCandidate {
   sourceName: string
   owner: StagedPdfSplit['owner']
   forceSplit?: boolean
+}
+
+interface PdfDirectorySource {
+  sourcePath: string
+  manifest: DirectorySourceManifest
+  owner: PdfDirectoryPlan['owner']
+}
+
+interface PdfSourceCollection {
+  candidates: PdfSourceCandidate[]
+  directories: PdfDirectorySource[]
+}
+
+interface BoundPdfDirectoryBundle {
+  splits: StagedPdfSplit[]
+  plan?: PdfDirectoryPlan
 }
 
 export interface PdfSplitServiceDependencies {
@@ -66,18 +90,18 @@ const defaultDependencies: PdfSplitServiceDependencies = {
 
 export class PdfSplitService {
   private readonly bundles = new Map<string, PdfSplitBundle>()
-  private readonly directoryBundles = new Map<string, StagedPdfSplit[]>()
+  private readonly directoryBundles = new Map<string, BoundPdfDirectoryBundle>()
 
   constructor(private readonly dependencies: PdfSplitServiceDependencies = defaultDependencies) {}
 
   async preflightAdd(request: PdfSplitAddRequest, signal?: AbortSignal): Promise<KnowledgePdfSplitConfirmation | null> {
-    const candidates = await collectAddPdfCandidates(request.inputs, signal)
+    const sources = await collectAddPdfSources(request.inputs, signal)
     return await this.preflight(
       'add',
       request.baseId,
       request.processorId,
       hashJson({ inputs: request.inputs, conflictStrategy: request.conflictStrategy }),
-      candidates,
+      sources,
       signal
     )
   }
@@ -96,13 +120,13 @@ export class PdfSplitService {
     request: PdfSplitReindexRequest,
     signal?: AbortSignal
   ): Promise<KnowledgePdfSplitConfirmation | null> {
-    const candidates = await collectReindexPdfCandidates(request.baseId, request.rootItems, signal)
+    const sources = await collectReindexPdfSources(request.baseId, request.rootItems, signal)
     return await this.preflight(
       'reindex',
       request.baseId,
       request.processorId,
       hashJson({ itemIds: request.rootItems.map((item) => item.id).sort() }),
-      candidates,
+      sources,
       signal
     )
   }
@@ -114,6 +138,31 @@ export class PdfSplitService {
       request.baseId,
       request.processorId,
       hashJson({ itemIds: request.rootItems.map((item) => item.id).sort() })
+    )
+  }
+
+  async preflightRestore(
+    request: PdfSplitRestoreRequest,
+    signal?: AbortSignal
+  ): Promise<KnowledgePdfSplitConfirmation | null> {
+    const sources = await collectAddPdfSources(request.inputs, signal)
+    return await this.preflight(
+      'restore',
+      request.sourceBaseId,
+      request.processorId,
+      hashJson({ inputs: request.inputs }),
+      sources,
+      signal
+    )
+  }
+
+  async confirmRestore(request: PdfSplitRestoreRequest, token: string): Promise<PdfSplitBundle> {
+    return await this.confirm(
+      token,
+      'restore',
+      request.sourceBaseId,
+      request.processorId,
+      hashJson({ inputs: request.inputs })
     )
   }
 
@@ -129,8 +178,11 @@ export class PdfSplitService {
     }
   }
 
-  async bindDirectorySplits(itemId: string, splits: StagedPdfSplit[]): Promise<void> {
-    if (splits.length === 0) return
+  async bindDirectoryBundle(itemId: string, splits: StagedPdfSplit[], plan?: PdfDirectoryPlan): Promise<void> {
+    if (splits.length === 0) {
+      if (plan) this.directoryBundles.set(itemId, { splits: [], plan })
+      return
+    }
     const bindingRoot = path.join(this.getStagingRoot(), 'bound', itemId)
     await fsp.rm(bindingRoot, { recursive: true, force: true })
     await fsp.mkdir(bindingRoot, { recursive: true })
@@ -142,10 +194,11 @@ export class PdfSplitService {
         boundSplits.push({
           ...split,
           stagingDir: destination,
+          stagedSourcePath: remapStagedPath(split.stagingDir, destination, split.stagedSourcePath),
           parts: split.parts.map((part) => ({ ...part, path: path.join(destination, path.basename(part.path)) }))
         })
       }
-      this.directoryBundles.set(itemId, boundSplits)
+      this.directoryBundles.set(itemId, { splits: boundSplits, plan })
     } catch (error) {
       await fsp.rm(bindingRoot, { recursive: true, force: true })
       throw error
@@ -179,6 +232,14 @@ export class PdfSplitService {
           await copyStagedFile(baseId, part.path, part.relativePath, options.signal, options.overwrite ?? true)
           copiedRelativePaths.push(part.relativePath)
         }
+        options.signal?.throwIfAborted()
+        await copyStagedFile(
+          baseId,
+          split.stagedSourcePath,
+          sourceRelativePath,
+          options.signal,
+          options.overwrite ?? true
+        )
       } catch (error) {
         await Promise.all(
           copiedRelativePaths.map((relativePath) =>
@@ -196,7 +257,7 @@ export class PdfSplitService {
     try {
       await copyStagedFile(
         baseId,
-        split.sourcePath,
+        split.stagedSourcePath,
         KnowledgeRelativePathSchema.parse(`${stagedRelativePrefix}/.source/${sourceFileName}`),
         options.signal,
         true
@@ -223,11 +284,26 @@ export class PdfSplitService {
   }
 
   getDirectorySplits(itemId: string): readonly StagedPdfSplit[] {
-    return this.directoryBundles.get(itemId) ?? []
+    return this.directoryBundles.get(itemId)?.splits ?? []
+  }
+
+  getDirectoryManifest(itemId: string): DirectorySourceManifest | undefined {
+    return this.directoryBundles.get(itemId)?.plan?.manifest
+  }
+
+  async assertDirectoryBundleCurrent(itemId: string, signal?: AbortSignal): Promise<void> {
+    const plan = this.directoryBundles.get(itemId)?.plan
+    if (plan) await assertDirectoryPlanCurrent(plan, signal)
+  }
+
+  async assertBundleDirectoriesCurrent(bundle: PdfSplitBundle, signal?: AbortSignal): Promise<void> {
+    for (const plan of bundle.directoryPlans) {
+      await assertDirectoryPlanCurrent(plan, signal)
+    }
   }
 
   async discardDirectorySplits(itemId: string): Promise<void> {
-    const splits = this.directoryBundles.get(itemId)
+    const splits = this.directoryBundles.get(itemId)?.splits
     this.directoryBundles.delete(itemId)
     if (splits?.[0]) {
       await fsp.rm(path.dirname(splits[0].stagingDir), { recursive: true, force: true })
@@ -254,15 +330,15 @@ export class PdfSplitService {
     baseId: string,
     processorId: FileProcessorId,
     requestFingerprint: string,
-    candidates: PdfSourceCandidate[],
+    sources: PdfSourceCollection,
     signal?: AbortSignal
   ): Promise<KnowledgePdfSplitConfirmation | null> {
     await this.cleanupExpired()
-    if (candidates.length === 0) return null
+    if (sources.candidates.length === 0) return null
 
     const limits = resolvePdfSplitLimits(processorId)
     const inspected: Array<PdfSourceCandidate & PdfInspection & { sourceBytes: number }> = []
-    for (const candidate of candidates) {
+    for (const candidate of sources.candidates) {
       signal?.throwIfAborted()
       const stats = await fsp.stat(candidate.sourcePath)
       if (!stats.isFile()) {
@@ -292,6 +368,18 @@ export class PdfSplitService {
     )
     if (splitCandidates.length === 0) return null
 
+    const fingerprintsBySourcePath = new Map(
+      inspected.map((candidate) => [candidate.sourcePath, candidate.fingerprint])
+    )
+    const directoryPlans: PdfDirectoryPlan[] = sources.directories.map((directory) => ({
+      ...directory,
+      pdfFingerprints: getDirectoryManifestPdfPaths(directory.manifest).map((sourcePath) => {
+        const fingerprint = fingerprintsBySourcePath.get(sourcePath)
+        if (!fingerprint) throw new Error(`Missing PDF inspection for directory source: ${sourcePath}`)
+        return { sourcePath, fingerprint }
+      })
+    }))
+
     await this.assertResources(splitCandidates.map((candidate) => candidate.sourceBytes))
     const token = randomUUID()
     const tokenRoot = path.join(this.getStagingRoot(), token)
@@ -302,11 +390,14 @@ export class PdfSplitService {
       for (const [index, candidate] of splitCandidates.entries()) {
         signal?.throwIfAborted()
         const stagingDir = path.join(tokenRoot, String(index))
-        await fsp.mkdir(stagingDir, { recursive: true })
+        const stagedSourcePath = path.join(stagingDir, '.source', path.basename(candidate.sourcePath))
+        await fsp.mkdir(path.dirname(stagedSourcePath), { recursive: true })
+        await fsp.copyFile(candidate.sourcePath, stagedSourcePath)
+        signal?.throwIfAborted()
         const splitMessage = await this.dependencies.runWorker(
           {
             operation: 'split',
-            sourcePath: candidate.sourcePath,
+            sourcePath: stagedSourcePath,
             stagingDir,
             expectedFingerprint: candidate.fingerprint,
             initialRanges: createInitialPdfPageRanges(candidate.pageCount, limits),
@@ -323,6 +414,7 @@ export class PdfSplitService {
         }
         splits.push({
           sourcePath: candidate.sourcePath,
+          stagedSourcePath,
           sourceName: candidate.sourceName,
           sourceBytes: candidate.sourceBytes,
           sourceFingerprint: candidate.fingerprint,
@@ -351,7 +443,7 @@ export class PdfSplitService {
           parts: split.parts.map(({ pageStart, pageEnd, bytes }) => ({ pageStart, pageEnd, bytes }))
         })),
         totalTasks,
-        estimatedDiskBytes: 3 * splits.reduce((total, split) => total + split.sourceBytes, 0) + RESOURCE_HEADROOM_BYTES
+        estimatedDiskBytes: 4 * splits.reduce((total, split) => total + split.sourceBytes, 0) + RESOURCE_HEADROOM_BYTES
       }
       const bundle: PdfSplitBundle = {
         token,
@@ -361,7 +453,8 @@ export class PdfSplitService {
         limitsFingerprint: limits.fingerprint,
         expiresAt,
         confirmation,
-        splits
+        splits,
+        directoryPlans
       }
       this.bundles.set(token, bundle)
       return confirmation
@@ -395,11 +488,23 @@ export class PdfSplitService {
     }
 
     for (const split of bundle.splits) {
-      const fingerprint = await hashFile(split.sourcePath)
+      let fingerprint: string
+      try {
+        fingerprint = await hashFile(split.sourcePath)
+      } catch (error) {
+        await this.discard(token)
+        throw new Error(`PDF changed after confirmation was prepared: ${split.sourceName}`, { cause: error })
+      }
       if (fingerprint !== split.sourceFingerprint) {
         await this.discard(token)
         throw new Error(`PDF changed after confirmation was prepared: ${split.sourceName}`)
       }
+    }
+    try {
+      await this.assertBundleDirectoriesCurrent(bundle)
+    } catch (error) {
+      await this.discard(token)
+      throw error
     }
     return bundle
   }
@@ -414,7 +519,7 @@ export class PdfSplitService {
       )
     }
 
-    const requiredDisk = 3 * sourceSizes.reduce((total, size) => total + size, 0) + RESOURCE_HEADROOM_BYTES
+    const requiredDisk = 4 * sourceSizes.reduce((total, size) => total + size, 0) + RESOURCE_HEADROOM_BYTES
     const freeDisk = await this.dependencies.freeDiskBytes(this.getStagingRoot())
     if (freeDisk < requiredDisk) {
       throw new Error(
@@ -455,11 +560,12 @@ function resolvePdfSplitLimits(processorId: FileProcessorId): PdfSplitLimits {
   }
 }
 
-async function collectAddPdfCandidates(
+async function collectAddPdfSources(
   inputs: KnowledgeAddItemInput[],
   signal?: AbortSignal
-): Promise<PdfSourceCandidate[]> {
+): Promise<PdfSourceCollection> {
   const candidates: PdfSourceCandidate[] = []
+  const directories: PdfDirectorySource[] = []
   for (const [inputIndex, input] of inputs.entries()) {
     signal?.throwIfAborted()
     if (input.type === 'file' && isPdfPath(input.data.path) && !input.data.indexedPath) {
@@ -469,7 +575,13 @@ async function collectAddPdfCandidates(
         owner: { kind: 'add-file', inputIndex }
       })
     } else if (input.type === 'directory') {
-      const paths = await collectDirectoryPdfPaths(input.data.source, signal)
+      const manifest = await readDirectorySourceManifest(input.data.source, signal)
+      const paths = getDirectoryManifestPdfPaths(manifest)
+      directories.push({
+        sourcePath: input.data.source,
+        manifest,
+        owner: { kind: 'add-directory', inputIndex }
+      })
       candidates.push(
         ...paths.map((sourcePath) => ({
           sourcePath,
@@ -479,15 +591,16 @@ async function collectAddPdfCandidates(
       )
     }
   }
-  return candidates
+  return { candidates, directories }
 }
 
-async function collectReindexPdfCandidates(
+async function collectReindexPdfSources(
   baseId: string,
   rootItems: KnowledgeItem[],
   signal?: AbortSignal
-): Promise<PdfSourceCandidate[]> {
+): Promise<PdfSourceCollection> {
   const candidates: PdfSourceCandidate[] = []
+  const directories: PdfDirectorySource[] = []
   for (const item of rootItems) {
     signal?.throwIfAborted()
     if (item.type === 'file' && isPdfPath(item.data.relativePath) && !item.data.pdfPart) {
@@ -504,7 +617,13 @@ async function collectReindexPdfCandidates(
         forceSplit: true
       })
     } else if (item.type === 'directory') {
-      const paths = await collectDirectoryPdfPaths(item.data.source, signal)
+      const manifest = await readDirectorySourceManifest(item.data.source, signal)
+      const paths = getDirectoryManifestPdfPaths(manifest)
+      directories.push({
+        sourcePath: item.data.source,
+        manifest,
+        owner: { kind: 'reindex-directory', itemId: item.id }
+      })
       candidates.push(
         ...paths.map((sourcePath) => ({
           sourcePath,
@@ -514,24 +633,7 @@ async function collectReindexPdfCandidates(
       )
     }
   }
-  return candidates
-}
-
-async function collectDirectoryPdfPaths(directoryPath: string, signal?: AbortSignal): Promise<string[]> {
-  signal?.throwIfAborted()
-  const entries = await fsp.readdir(directoryPath, { withFileTypes: true })
-  const paths: string[] = []
-  for (const entry of entries) {
-    signal?.throwIfAborted()
-    if (entry.name.startsWith('.')) continue
-    const entryPath = path.join(directoryPath, entry.name)
-    if (entry.isDirectory()) {
-      paths.push(...(await collectDirectoryPdfPaths(entryPath, signal)))
-    } else if (entry.isFile() && isPdfPath(entry.name)) {
-      paths.push(entryPath)
-    }
-  }
-  return paths
+  return { candidates, directories }
 }
 
 function isPdfPath(filePath: string): boolean {
@@ -551,6 +653,50 @@ async function hashFile(filePath: string): Promise<string> {
     stream.once('end', resolve)
   })
   return hash.digest('hex')
+}
+
+async function assertDirectoryPlanCurrent(plan: PdfDirectoryPlan, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted()
+  let currentManifest: DirectorySourceManifest
+  try {
+    currentManifest = await readDirectorySourceManifest(plan.sourcePath, signal)
+  } catch (error) {
+    throw new Error(`Directory changed after PDF split confirmation was prepared: ${path.basename(plan.sourcePath)}`, {
+      cause: error
+    })
+  }
+
+  if (
+    !arraysEqual(getSupportedDirectoryManifestPaths(currentManifest), getSupportedDirectoryManifestPaths(plan.manifest))
+  ) {
+    throw new Error(`Directory changed after PDF split confirmation was prepared: ${path.basename(plan.sourcePath)}`)
+  }
+
+  for (const pdf of plan.pdfFingerprints) {
+    signal?.throwIfAborted()
+    let fingerprint: string
+    try {
+      fingerprint = await hashFile(pdf.sourcePath)
+    } catch (error) {
+      throw new Error(
+        `Directory changed after PDF split confirmation was prepared: ${path.basename(plan.sourcePath)}`,
+        {
+          cause: error
+        }
+      )
+    }
+    if (fingerprint !== pdf.fingerprint) {
+      throw new Error(`PDF changed after confirmation was prepared: ${path.basename(pdf.sourcePath)}`)
+    }
+  }
+}
+
+function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function remapStagedPath(sourceRoot: string, destinationRoot: string, sourcePath: string): string {
+  return path.join(destinationRoot, path.relative(sourceRoot, sourcePath))
 }
 
 async function copyStagedFile(

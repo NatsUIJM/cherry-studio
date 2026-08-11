@@ -7,6 +7,7 @@ import { knowledgeBaseService } from '@data/services/KnowledgeBaseService'
 import { knowledgeItemService } from '@data/services/KnowledgeItemService'
 import { loggerService } from '@logger'
 import type { KeyedMutex } from '@main/core/concurrency/KeyedMutex'
+import { FILE_PROCESSING_JOB_TYPES } from '@main/features/fileProcessing'
 import { nextFreeKnowledgeRelativePath } from '@main/utils/knowledge'
 import { getFileExt } from '@main/utils/legacyFile'
 import { DataApiErrorFactory } from '@shared/data/api/errors'
@@ -125,6 +126,36 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
     conflictStrategy: KnowledgeAddConflictStrategy = DEFAULT_KNOWLEDGE_ADD_CONFLICT_STRATEGY,
     splitConfirmationToken?: string
   ): Promise<KnowledgeAddItemsResult> {
+    return await this.addItemsInternal(baseId, inputs, conflictStrategy, splitConfirmationToken)
+  }
+
+  async addRestoredItems(
+    baseId: string,
+    inputs: KnowledgeAddItemInput[],
+    splitBundle: PdfSplitBundle | null
+  ): Promise<void> {
+    if (splitBundle && splitBundle.operation !== 'restore') {
+      throw new Error(`Expected a restore PDF split bundle, received '${splitBundle.operation}'`)
+    }
+    const result = await this.addItemsInternal(baseId, inputs, DEFAULT_KNOWLEDGE_ADD_CONFLICT_STRATEGY, undefined, {
+      splitBundle,
+      skipPdfSplitPreflight: true
+    })
+    if (result.status !== 'added') {
+      throw new Error(`Restore item acceptance returned unexpected status '${result.status}'`)
+    }
+  }
+
+  private async addItemsInternal(
+    baseId: string,
+    inputs: KnowledgeAddItemInput[],
+    conflictStrategy: KnowledgeAddConflictStrategy,
+    splitConfirmationToken?: string,
+    options: { splitBundle: PdfSplitBundle | null; skipPdfSplitPreflight: boolean } = {
+      splitBundle: null,
+      skipPdfSplitPreflight: false
+    }
+  ): Promise<KnowledgeAddItemsResult> {
     const base = assertBaseCanRunRuntimeOperation(baseId, 'addItems')
 
     if (inputs.length === 0) {
@@ -155,8 +186,8 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
       }
     }
 
-    let splitBundle: PdfSplitBundle | null = null
-    if (base.fileProcessorId) {
+    let splitBundle = options.splitBundle
+    if (base.fileProcessorId && !options.skipPdfSplitPreflight) {
       const processorId = FileProcessorIdSchema.parse(base.fileProcessorId)
       const splitRequest = { baseId: base.id, processorId, inputs: itemsToAdd, conflictStrategy }
       if (splitConfirmationToken) {
@@ -188,6 +219,9 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
 
     await this.knowledgeLockManager.runExclusive(base.id, async () => {
       try {
+        if (splitBundle) {
+          await pdfSplitService.assertBundleDirectoriesCurrent(splitBundle)
+        }
         if (conflictStrategy === 'replace') {
           // Purge the conflicting existing items synchronously inside the lock and
           // BEFORE reserving paths, so the freed name is claimed by the incoming
@@ -237,11 +271,15 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
           const createdItem = knowledgeItemService.createActive(base.id, createInput)
           acceptedItems.push(createdItem)
           schedulingItems.push(createdItem)
-          const directorySplits = splitBundle?.splits.filter(
-            (split) => split.owner.kind === 'add-directory' && split.owner.inputIndex === inputIndex
+          const directorySplits =
+            splitBundle?.splits.filter(
+              (split) => split.owner.kind === 'add-directory' && split.owner.inputIndex === inputIndex
+            ) ?? []
+          const directoryPlan = splitBundle?.directoryPlans.find(
+            (plan) => plan.owner.kind === 'add-directory' && plan.owner.inputIndex === inputIndex
           )
-          if (createdItem.type === 'directory' && directorySplits?.length) {
-            await pdfSplitService.bindDirectorySplits(createdItem.id, directorySplits)
+          if (createdItem.type === 'directory' && (directoryPlan || directorySplits.length > 0)) {
+            await pdfSplitService.bindDirectoryBundle(createdItem.id, directorySplits, directoryPlan)
             boundDirectoryItemIds.push(createdItem.id)
           }
         }
@@ -368,6 +406,7 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
     const boundDirectoryItemIds: string[] = []
     try {
       if (splitBundle) {
+        await pdfSplitService.assertBundleDirectoriesCurrent(splitBundle)
         const directorySplitsByItemId = new Map<string, StagedPdfSplit[]>()
         for (const split of splitBundle.splits) {
           if (split.owner.kind === 'reindex-directory') {
@@ -376,8 +415,17 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
             directorySplitsByItemId.set(split.owner.itemId, existing)
           }
         }
-        for (const [itemId, splits] of directorySplitsByItemId) {
-          await pdfSplitService.bindDirectorySplits(itemId, splits)
+        const directoryItemIds = new Set([
+          ...directorySplitsByItemId.keys(),
+          ...splitBundle.directoryPlans.flatMap((plan) =>
+            plan.owner.kind === 'reindex-directory' ? [plan.owner.itemId] : []
+          )
+        ])
+        for (const itemId of directoryItemIds) {
+          const plan = splitBundle.directoryPlans.find(
+            (candidate) => candidate.owner.kind === 'reindex-directory' && candidate.owner.itemId === itemId
+          )
+          await pdfSplitService.bindDirectoryBundle(itemId, directorySplitsByItemId.get(itemId) ?? [], plan)
           boundDirectoryItemIds.push(itemId)
         }
 
@@ -647,7 +695,7 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
     const jobManager = application.get('JobManager')
     const activeFileProcessingJobs = await jobManager.list({
       status: ['pending', 'delayed', 'running'],
-      type: ['file-processing.background', 'file-processing.remote-poll']
+      type: [...FILE_PROCESSING_JOB_TYPES]
     })
     const knowledgeLinkedJobIds = activeFileProcessingJobs
       .filter((job) => {

@@ -420,7 +420,7 @@ vi.mock('../components/RestoreKnowledgeBaseDialog', () => ({
               embeddingModelId: 'openai::text-embedding-3-small',
               dimensions: 1024
             })
-            onRestored(result.base)
+            if (result.status === 'restored') onRestored(result.base)
             onOpenChange(false)
           }}>
           Submit Restore
@@ -1567,7 +1567,9 @@ describe('KnowledgePage', () => {
       embeddingModelId: 'openai::text-embedding-3-small'
     })
     let bases = [failedBase]
-    const restoreBase = vi.fn().mockResolvedValue({ base: restoredBase, skippedMissingSourceCount: 0 })
+    const restoreBase = vi
+      .fn()
+      .mockResolvedValue({ status: 'restored', base: restoredBase, skippedMissingSourceCount: 0 })
 
     mockUseKnowledgeBases.mockImplementation(() => ({
       bases,
@@ -1644,7 +1646,9 @@ describe('KnowledgePage', () => {
       embeddingModelId: 'openai::text-embedding-3-small'
     })
     let bases = [failedBase]
-    const restoreBase = vi.fn().mockResolvedValue({ base: restoredBase, skippedMissingSourceCount: 0 })
+    const restoreBase = vi
+      .fn()
+      .mockResolvedValue({ status: 'restored', base: restoredBase, skippedMissingSourceCount: 0 })
 
     mockUseKnowledgeBases.mockImplementation(() => ({
       bases,

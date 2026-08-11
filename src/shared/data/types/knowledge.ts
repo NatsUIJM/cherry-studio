@@ -651,19 +651,11 @@ export const RestoreKnowledgeBaseSchema = z
     // A vector restore supplies the resolved model and vector size; a BM25-only
     // restore supplies null for both. The renderer probes dimensions when needed.
     dimensions: z.number().int().positive().nullable(),
-    embeddingModelId: z.string().trim().min(1).nullable()
+    embeddingModelId: z.string().trim().min(1).nullable(),
+    splitConfirmationToken: z.string().trim().min(1).optional()
   })
   .superRefine(refineRuntimeConfig)
 export type RestoreKnowledgeBaseDto = z.input<typeof RestoreKnowledgeBaseSchema>
-
-// Restore is a partial operation: root items whose source is genuinely gone are skipped rather
-// than aborting the whole restore, so the result reports how many were dropped for the UI to tell
-// the user (a silent count is a silent data loss).
-export const RestoreKnowledgeBaseResultSchema = z.strictObject({
-  base: KnowledgeBaseSchema,
-  skippedMissingSourceCount: z.number().int().nonnegative()
-})
-export type RestoreKnowledgeBaseResult = z.infer<typeof RestoreKnowledgeBaseResultSchema>
 
 const CreateKnowledgeItemBaseSchema = z.strictObject({
   groupId: KnowledgeItemIdSchema.nullable().optional()
@@ -814,6 +806,18 @@ const KnowledgeSplitConfirmationRequiredResultSchema = z.strictObject({
   confirmation: KnowledgePdfSplitConfirmationSchema
 })
 
+// Restore is a partial operation: root items whose source is genuinely gone are skipped rather
+// than aborting the whole restore, so the restored branch reports how many were dropped.
+export const RestoreKnowledgeBaseResultSchema = z.discriminatedUnion('status', [
+  z.strictObject({
+    status: z.literal('restored'),
+    base: KnowledgeBaseSchema,
+    skippedMissingSourceCount: z.number().int().nonnegative()
+  }),
+  KnowledgeSplitConfirmationRequiredResultSchema
+])
+export type RestoreKnowledgeBaseResult = z.infer<typeof RestoreKnowledgeBaseResultSchema>
+
 /**
  * Result of `addItems`. `conflicts` is only returned by a `detect` pass that
  * found collisions and added nothing; `added` means the batch was applied.
@@ -848,6 +852,9 @@ export interface KnowledgeItemTitleSource {
     content?: string
     url?: string
     relativePath?: string
+    pdfSplitSource?: {
+      sourceName: string
+    }
   }
 }
 
@@ -926,6 +933,7 @@ export function getKnowledgeItemDisplayTitle(item: KnowledgeItemTitleSource): st
     case 'file':
       return getKnowledgePathBasename(data.relativePath || data.source || '')
     case 'directory':
+      if (data.pdfSplitSource) return getSyntheticPdfDisplayTitle(data)
       return getKnowledgePathBasename(data.relativePath || data.source || '')
     case 'note':
       return getKnowledgeNoteName(data)
@@ -954,8 +962,11 @@ export function getKnowledgeItemConflictKey(item: KnowledgeItemTitleSource): str
   const data = item.data
   switch (item.type) {
     case 'file':
-    case 'directory':
       return getKnowledgePathBasename(data.relativePath || data.source || '')
+    case 'directory':
+      return data.pdfSplitSource
+        ? getSyntheticPdfDisplayTitle(data)
+        : getKnowledgePathBasename(data.relativePath || data.source || '')
     case 'note': {
       const name = getKnowledgeNoteName(data)
       // An unnamed note has no real name to collide on — keep the empty key so detection skips it.
@@ -966,4 +977,17 @@ export function getKnowledgeItemConflictKey(item: KnowledgeItemTitleSource): str
     case 'url':
       return (data.url || '').trim()
   }
+}
+
+/** Presentation/conflict type for an item; synthetic PDF containers behave like files. */
+export function getKnowledgeItemDisplayType(item: KnowledgeItemTitleSource): KnowledgeItemType {
+  return item.type === 'directory' && item.data.pdfSplitSource ? 'file' : item.type
+}
+
+function getSyntheticPdfDisplayTitle(data: KnowledgeItemTitleSource['data']): string {
+  const sourceName = getKnowledgePathBasename(data.pdfSplitSource?.sourceName || data.source || '')
+  const prefix = getKnowledgePathBasename(data.relativePath || data.source || sourceName)
+  const extensionIndex = sourceName.lastIndexOf('.')
+  const extension = extensionIndex > 0 ? sourceName.slice(extensionIndex) : ''
+  return extension && !prefix.toLowerCase().endsWith(extension.toLowerCase()) ? `${prefix}${extension}` : prefix
 }

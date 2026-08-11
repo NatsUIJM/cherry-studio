@@ -1,3 +1,5 @@
+import path from 'node:path'
+
 import type * as LifecycleModule from '@main/core/lifecycle'
 import { getDependencies, getPhase } from '@main/core/lifecycle/decorators'
 import { Phase } from '@main/core/lifecycle/types'
@@ -32,6 +34,7 @@ const {
   knowledgeBaseListMock,
   knowledgeBaseUpdateMock,
   knowledgeItemCreateActiveMock,
+  knowledgeItemCreatePdfSplitSubtreeMock,
   knowledgeItemDeleteMock,
   knowledgeItemGetDeletingRootGroupsMock,
   knowledgeItemFailInterruptedItemsMock,
@@ -58,9 +61,15 @@ const {
   probeKnowledgeSourcePathMock,
   pdfSplitCleanupAllMock,
   pdfSplitCleanupExpiredMock,
+  pdfSplitAssertBundleDirectoriesCurrentMock,
+  pdfSplitBindDirectoryBundleMock,
+  pdfSplitConfirmAddMock,
   pdfSplitDiscardMock,
+  pdfSplitConfirmRestoreMock,
   pdfSplitPreflightAddMock,
   pdfSplitPreflightReindexMock,
+  pdfSplitPreflightRestoreMock,
+  pdfSplitPublishStagedSplitMock,
   registerIntervalMock
 } = vi.hoisted(() => ({
   cancelManyMock: vi.fn(),
@@ -80,6 +89,7 @@ const {
   knowledgeBaseListMock: vi.fn(),
   knowledgeBaseUpdateMock: vi.fn(),
   knowledgeItemCreateActiveMock: vi.fn(),
+  knowledgeItemCreatePdfSplitSubtreeMock: vi.fn(),
   knowledgeItemDeleteMock: vi.fn(),
   knowledgeItemGetDeletingRootGroupsMock: vi.fn(),
   knowledgeItemFailInterruptedItemsMock: vi.fn(),
@@ -106,9 +116,15 @@ const {
   probeKnowledgeSourcePathMock: vi.fn(),
   pdfSplitCleanupAllMock: vi.fn(),
   pdfSplitCleanupExpiredMock: vi.fn(),
+  pdfSplitAssertBundleDirectoriesCurrentMock: vi.fn(),
+  pdfSplitBindDirectoryBundleMock: vi.fn(),
+  pdfSplitConfirmAddMock: vi.fn(),
   pdfSplitDiscardMock: vi.fn(),
+  pdfSplitConfirmRestoreMock: vi.fn(),
   pdfSplitPreflightAddMock: vi.fn(),
   pdfSplitPreflightReindexMock: vi.fn(),
+  pdfSplitPreflightRestoreMock: vi.fn(),
+  pdfSplitPublishStagedSplitMock: vi.fn(),
   registerIntervalMock: vi.fn()
 }))
 
@@ -150,16 +166,22 @@ vi.mock('@logger', () => ({
 
 vi.mock('../ingestion/pdfSplit/PdfSplitService', () => ({
   pdfSplitService: {
-    bindDirectorySplits: vi.fn(),
+    assertBundleDirectoriesCurrent: pdfSplitAssertBundleDirectoriesCurrentMock,
+    assertDirectoryBundleCurrent: vi.fn(),
+    bindDirectoryBundle: pdfSplitBindDirectoryBundleMock,
     cleanupAll: pdfSplitCleanupAllMock,
     cleanupExpired: pdfSplitCleanupExpiredMock,
-    confirmAdd: vi.fn(),
+    confirmAdd: pdfSplitConfirmAddMock,
     confirmReindex: vi.fn(),
+    confirmRestore: pdfSplitConfirmRestoreMock,
     discard: pdfSplitDiscardMock,
     discardDirectorySplits: vi.fn(),
+    getDirectoryManifest: vi.fn(),
+    getDirectorySplits: vi.fn(() => []),
     preflightAdd: pdfSplitPreflightAddMock,
     preflightReindex: pdfSplitPreflightReindexMock,
-    publishStagedSplit: vi.fn()
+    preflightRestore: pdfSplitPreflightRestoreMock,
+    publishStagedSplit: pdfSplitPublishStagedSplitMock
   }
 }))
 
@@ -201,6 +223,7 @@ vi.mock('@data/services/KnowledgeBaseService', () => ({
 vi.mock('@data/services/KnowledgeItemService', () => ({
   knowledgeItemService: {
     createActive: knowledgeItemCreateActiveMock,
+    createPdfSplitSubtree: knowledgeItemCreatePdfSplitSubtreeMock,
     delete: knowledgeItemDeleteMock,
     getDeletingRootGroups: knowledgeItemGetDeletingRootGroupsMock,
     failInterruptedItems: knowledgeItemFailInterruptedItemsMock,
@@ -345,6 +368,24 @@ function flushMicrotasks(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0))
 }
 
+function createPdfSplitConfirmation() {
+  return {
+    token: 'restore-split-token',
+    expiresAt: '2026-08-10T08:10:00.000Z',
+    processorId: 'doc2x',
+    files: [
+      {
+        sourceName: 'report.pdf',
+        pageCount: 31,
+        sourceBytes: 1024,
+        parts: [{ pageStart: 1, pageEnd: 31, bytes: 512 }]
+      }
+    ],
+    totalTasks: 1,
+    estimatedDiskBytes: 4096
+  }
+}
+
 const createdItemBaseIds = new Map<string, string>()
 
 describe('KnowledgeService', () => {
@@ -416,6 +457,7 @@ describe('KnowledgeService', () => {
     cancelMock.mockResolvedValue({ outcome: 'cancelled' })
     pdfSplitPreflightAddMock.mockResolvedValue(null)
     pdfSplitPreflightReindexMock.mockResolvedValue(null)
+    pdfSplitPreflightRestoreMock.mockResolvedValue(null)
     getIndexStoreMock.mockReturnValue({
       search: storeSearchMock,
       listMaterialUnits: listMaterialUnitsMock,
@@ -581,6 +623,12 @@ describe('KnowledgeService', () => {
         input: { context: { dataId: 'file-1' } }
       },
       {
+        id: 'fp-local-job',
+        type: 'file-processing.background-local',
+        status: 'running',
+        input: { context: { dataId: 'file-2' } }
+      },
+      {
         id: 'other-job',
         type: 'file-processing.background',
         status: 'running',
@@ -590,9 +638,17 @@ describe('KnowledgeService', () => {
 
     await (service as unknown as { onAllReady: () => Promise<void> }).onAllReady()
 
+    expect(listMock).toHaveBeenCalledWith({
+      status: ['pending', 'delayed', 'running'],
+      type: ['file-processing.background', 'file-processing.background-local', 'file-processing.remote-poll']
+    })
     expect(cancelMock).toHaveBeenCalledWith('fp-job-1', 'knowledge-startup-recovery')
+    expect(cancelMock).toHaveBeenCalledWith('fp-local-job', 'knowledge-startup-recovery')
     expect(cancelMock).not.toHaveBeenCalledWith('other-job', expect.anything())
     expect(cancelMock.mock.invocationCallOrder[0]).toBeLessThan(
+      knowledgeItemFailInterruptedItemsMock.mock.invocationCallOrder[0]
+    )
+    expect(cancelMock.mock.invocationCallOrder[1]).toBeLessThan(
       knowledgeItemFailInterruptedItemsMock.mock.invocationCallOrder[0]
     )
   })
@@ -787,7 +843,7 @@ describe('KnowledgeService', () => {
         embeddingModelId: 'provider::new',
         dimensions: 6
       })
-    ).resolves.toEqual({ base: restoredBase, skippedMissingSourceCount: 0 })
+    ).resolves.toEqual({ status: 'restored', base: restoredBase, skippedMissingSourceCount: 0 })
 
     expect(enqueueMock).toHaveBeenCalledWith(
       'knowledge.index-documents',
@@ -813,11 +869,175 @@ describe('KnowledgeService', () => {
         embeddingModelId: null,
         dimensions: null
       })
-    ).resolves.toEqual({ base: restoredBase, skippedMissingSourceCount: 0 })
+    ).resolves.toEqual({ status: 'restored', base: restoredBase, skippedMissingSourceCount: 0 })
 
     expect(knowledgeBaseCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({ embeddingModelId: null, dimensions: null })
     )
+  })
+
+  it('preflights and confirms a direct oversized PDF restore before creating the target base', async () => {
+    const service = new KnowledgeService()
+    const sourceBase = createBase({ id: 'source-kb', fileProcessorId: 'doc2x' })
+    const restoredBase = createBase({ id: 'restored-kb', fileProcessorId: 'doc2x' })
+    const sourceItem = createFileItem('source-file', sourceBase.id, '/docs/report.pdf', 'completed')
+    const parent = {
+      ...createDirectoryItem('split-root', null, 'processing'),
+      baseId: restoredBase.id,
+      data: {
+        source: '/docs/report.pdf',
+        relativePath: 'report' as PosixRelativeFilePath,
+        pdfSplitSource: {
+          relativePath: 'report/.source/report.pdf' as PosixRelativeFilePath,
+          sourceName: 'report.pdf',
+          totalPages: 31
+        }
+      }
+    }
+    const part = {
+      ...createFileItem('split-part', restoredBase.id, 'report_0001-0031.pdf', 'processing'),
+      groupId: parent.id,
+      data: {
+        source: 'report_0001-0031.pdf',
+        relativePath: 'report/report_0001-0031.pdf' as PosixRelativeFilePath,
+        pdfPart: { partIndex: 1, pageStart: 1, pageEnd: 31 }
+      }
+    }
+    const confirmation = createPdfSplitConfirmation()
+    const split = {
+      sourcePath: '/mock/feature.knowledgebase.data/source-kb/raw/report.pdf',
+      stagedSourcePath: '/staging/report.pdf',
+      sourceName: 'report.pdf',
+      sourceBytes: 1024,
+      sourceFingerprint: 'fingerprint',
+      pageCount: 31,
+      stagingDir: '/staging/split',
+      parts: [{ pageStart: 1, pageEnd: 31, bytes: 512, path: '/staging/part.pdf' }],
+      owner: { kind: 'add-file' as const, inputIndex: 0 }
+    }
+    const bundle = {
+      token: confirmation.token,
+      operation: 'restore' as const,
+      baseId: sourceBase.id,
+      requestFingerprint: 'request',
+      limitsFingerprint: 'limits',
+      expiresAt: Date.now() + 60_000,
+      confirmation,
+      splits: [split],
+      directoryPlans: []
+    }
+    knowledgeBaseGetByIdMock.mockImplementation((id: string) => (id === sourceBase.id ? sourceBase : restoredBase))
+    knowledgeBaseCreateMock.mockReturnValue(restoredBase)
+    knowledgeItemGetRootItemsByBaseIdMock.mockReturnValue([sourceItem])
+    knowledgeItemCreatePdfSplitSubtreeMock.mockReturnValue({ parent, parts: [part] })
+    knowledgeItemGetByIdMock.mockReturnValue(part)
+    pdfSplitPreflightRestoreMock.mockResolvedValueOnce(confirmation)
+    pdfSplitConfirmRestoreMock.mockResolvedValueOnce(bundle)
+    pdfSplitPublishStagedSplitMock.mockResolvedValueOnce({
+      sourceRelativePath: parent.data.pdfSplitSource.relativePath,
+      parts: [
+        {
+          ...split.parts[0],
+          fileName: part.data.source,
+          relativePath: part.data.relativePath
+        }
+      ]
+    })
+
+    const request = {
+      sourceBaseId: sourceBase.id,
+      name: 'Restored KB',
+      embeddingModelId: sourceBase.embeddingModelId,
+      dimensions: sourceBase.dimensions
+    }
+    await expect(service.restoreBase(request)).resolves.toEqual({
+      status: 'split_confirmation_required',
+      confirmation
+    })
+    expect(knowledgeBaseCreateMock).not.toHaveBeenCalled()
+
+    await expect(service.restoreBase({ ...request, splitConfirmationToken: confirmation.token })).resolves.toEqual({
+      status: 'restored',
+      base: restoredBase,
+      skippedMissingSourceCount: 0
+    })
+    expect(pdfSplitConfirmRestoreMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceBaseId: sourceBase.id, processorId: 'doc2x' }),
+      confirmation.token
+    )
+    expect(knowledgeItemCreatePdfSplitSubtreeMock).toHaveBeenCalledWith(restoredBase.id, expect.anything())
+  })
+
+  it('preflights and confirms an oversized PDF inside a restored directory using the same bound plan', async () => {
+    const service = new KnowledgeService()
+    const sourceBase = createBase({ id: 'source-kb', fileProcessorId: 'doc2x' })
+    const restoredBase = createBase({ id: 'restored-kb', fileProcessorId: 'doc2x' })
+    const sourceDirectory = {
+      ...createDirectoryItem('source-dir', null, 'completed'),
+      baseId: sourceBase.id,
+      data: { source: '/external/docs' }
+    }
+    const restoredDirectory = {
+      ...sourceDirectory,
+      id: 'restored-dir',
+      baseId: restoredBase.id,
+      status: 'preparing' as const
+    }
+    const confirmation = createPdfSplitConfirmation()
+    const split = {
+      sourcePath: '/external/docs/report.pdf',
+      stagedSourcePath: '/staging/report.pdf',
+      sourceName: 'report.pdf',
+      sourceBytes: 1024,
+      sourceFingerprint: 'fingerprint',
+      pageCount: 31,
+      stagingDir: '/staging/split',
+      parts: [{ pageStart: 1, pageEnd: 31, bytes: 512, path: '/staging/part.pdf' }],
+      owner: { kind: 'add-directory' as const, inputIndex: 0 }
+    }
+    const plan = {
+      sourcePath: '/external/docs',
+      manifest: [{ type: 'file' as const, externalPath: split.sourcePath, treePath: '/report.pdf' }],
+      pdfFingerprints: [{ sourcePath: split.sourcePath, fingerprint: split.sourceFingerprint }],
+      owner: { kind: 'add-directory' as const, inputIndex: 0 }
+    }
+    const bundle = {
+      token: confirmation.token,
+      operation: 'restore' as const,
+      baseId: sourceBase.id,
+      requestFingerprint: 'request',
+      limitsFingerprint: 'limits',
+      expiresAt: Date.now() + 60_000,
+      confirmation,
+      splits: [split],
+      directoryPlans: [plan]
+    }
+    knowledgeBaseGetByIdMock.mockImplementation((id: string) => (id === sourceBase.id ? sourceBase : restoredBase))
+    knowledgeBaseCreateMock.mockReturnValue(restoredBase)
+    knowledgeItemGetRootItemsByBaseIdMock.mockReturnValue([sourceDirectory])
+    knowledgeItemCreateActiveMock.mockReturnValue(restoredDirectory)
+    knowledgeItemGetByIdMock.mockReturnValue(restoredDirectory)
+    pdfSplitPreflightRestoreMock.mockResolvedValueOnce(confirmation)
+    pdfSplitConfirmRestoreMock.mockResolvedValueOnce(bundle)
+
+    const request = {
+      sourceBaseId: sourceBase.id,
+      name: 'Restored KB',
+      embeddingModelId: sourceBase.embeddingModelId,
+      dimensions: sourceBase.dimensions
+    }
+    await expect(service.restoreBase(request)).resolves.toEqual({
+      status: 'split_confirmation_required',
+      confirmation
+    })
+    expect(knowledgeBaseCreateMock).not.toHaveBeenCalled()
+
+    await expect(service.restoreBase({ ...request, splitConfirmationToken: confirmation.token })).resolves.toEqual({
+      status: 'restored',
+      base: restoredBase,
+      skippedMissingSourceCount: 0
+    })
+    expect(pdfSplitBindDirectoryBundleMock).toHaveBeenCalledWith(restoredDirectory.id, [split], plan)
   })
 
   it('carries the source base rerank threshold into the restored base', async () => {
@@ -869,7 +1089,7 @@ describe('KnowledgeService', () => {
         embeddingModelId: 'provider::new',
         dimensions: 6
       })
-    ).resolves.toEqual({ base: restoredBase, skippedMissingSourceCount: 1 })
+    ).resolves.toEqual({ status: 'restored', base: restoredBase, skippedMissingSourceCount: 1 })
 
     // The note is restored into the new base; the missing-source file is skipped, not restored.
     expect(createdItemBaseIds.get('keep-note')).toBe('restored-kb')
@@ -900,7 +1120,7 @@ describe('KnowledgeService', () => {
         embeddingModelId: 'provider::new',
         dimensions: 6
       })
-    ).resolves.toEqual({ base: restoredBase, skippedMissingSourceCount: 0 })
+    ).resolves.toEqual({ status: 'restored', base: restoredBase, skippedMissingSourceCount: 0 })
 
     // The unverifiable-source file is restored into the new base, not dropped.
     expect(createdItemBaseIds.get('/docs/report.pdf')).toBe('restored-kb')
@@ -930,7 +1150,7 @@ describe('KnowledgeService', () => {
         embeddingModelId: 'provider::new',
         dimensions: 6
       })
-    ).resolves.toEqual({ base: restoredBase, skippedMissingSourceCount: 2 })
+    ).resolves.toEqual({ status: 'restored', base: restoredBase, skippedMissingSourceCount: 2 })
 
     // The empty base is still created; nothing is enqueued because addItems([]) short-circuits.
     expect(knowledgeBaseCreateMock).toHaveBeenCalledTimes(1)
@@ -953,7 +1173,7 @@ describe('KnowledgeService', () => {
         embeddingModelId: 'provider::embed',
         dimensions: 3
       })
-    ).resolves.toEqual({ base: restoredBase, skippedMissingSourceCount: 0 })
+    ).resolves.toEqual({ status: 'restored', base: restoredBase, skippedMissingSourceCount: 0 })
 
     expect(knowledgeBaseCreateMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1271,6 +1491,38 @@ describe('KnowledgeService', () => {
 
     expect(knowledgeItemCreateActiveMock).not.toHaveBeenCalled()
     expect(copyFileIntoKnowledgeBaseAtMock).not.toHaveBeenCalled()
+    expect(fileProcessingStartJobMock).not.toHaveBeenCalled()
+    expect(enqueueMock).not.toHaveBeenCalled()
+  })
+
+  it('rejects a changed bound directory plan at item acceptance before creating rows or jobs', async () => {
+    const service = new KnowledgeService()
+    const confirmation = createPdfSplitConfirmation()
+    const input = { type: 'directory' as const, data: { source: '/external/docs' } }
+    const plan = {
+      sourcePath: input.data.source,
+      manifest: [{ type: 'file' as const, externalPath: '/external/docs/report.pdf', treePath: '/report.pdf' }],
+      pdfFingerprints: [{ sourcePath: '/external/docs/report.pdf', fingerprint: 'fingerprint' }],
+      owner: { kind: 'add-directory' as const, inputIndex: 0 }
+    }
+    const bundle = {
+      token: confirmation.token,
+      operation: 'add' as const,
+      baseId: 'kb-1',
+      requestFingerprint: 'request',
+      limitsFingerprint: 'limits',
+      expiresAt: Date.now() + 60_000,
+      confirmation,
+      splits: [],
+      directoryPlans: [plan]
+    }
+    knowledgeBaseGetByIdMock.mockReturnValue(createBase({ fileProcessorId: 'doc2x' }))
+    pdfSplitConfirmAddMock.mockResolvedValueOnce(bundle)
+    pdfSplitAssertBundleDirectoriesCurrentMock.mockRejectedValueOnce(new Error('Directory changed'))
+
+    await expect(service.addItems('kb-1', [input], 'rename', confirmation.token)).rejects.toThrow('Directory changed')
+
+    expect(knowledgeItemCreateActiveMock).not.toHaveBeenCalled()
     expect(fileProcessingStartJobMock).not.toHaveBeenCalled()
     expect(enqueueMock).not.toHaveBeenCalled()
   })
@@ -2668,6 +2920,37 @@ describe('KnowledgeService', () => {
       expect(result).toEqual({ applied: [CONCEPT_ID], notFound: [] })
     })
 
+    it('promotes managed PDF part Concept IDs to one synthetic-root deletion target', async () => {
+      const service = new KnowledgeService()
+      const conceptIds = ['report/report_0001-0015.pdf', 'report/report_0016-0031.pdf']
+      const parentId = 'split-root'
+      const parts = conceptIds.map((conceptId, index) => ({
+        ...createFileItem(`split-part-${index + 1}`, 'kb-1', conceptId, 'completed'),
+        groupId: parentId,
+        data: {
+          source: path.basename(conceptId),
+          relativePath: conceptId as PosixRelativeFilePath,
+          pdfPart: { partIndex: index + 1, pageStart: index === 0 ? 1 : 16, pageEnd: index === 0 ? 15 : 31 }
+        }
+      }))
+      getMaterialByRelativePathMock.mockImplementation(async (conceptId: string) => {
+        const index = conceptIds.indexOf(conceptId)
+        return index >= 0 ? { materialId: parts[index].id, relativePath: conceptId } : null
+      })
+      knowledgeItemGetByIdMock.mockImplementation((itemId: string) => parts.find((item) => item.id === itemId))
+
+      const result = await service.deleteConcepts('kb-1', conceptIds)
+
+      expect(knowledgeItemGetOutermostSelectedItemIdsMock).toHaveBeenCalledWith('kb-1', [parentId])
+      expect(knowledgeItemSetSubtreeStatusTxMock).toHaveBeenCalledWith(
+        expect.anything(),
+        'kb-1',
+        [parentId],
+        'deleting'
+      )
+      expect(result).toEqual({ applied: conceptIds, notFound: [] })
+    })
+
     it('partitions unresolved Concept IDs into notFound without failing the batch', async () => {
       const service = new KnowledgeService()
       arrangeResolvable()
@@ -2749,7 +3032,7 @@ describe('KnowledgeService', () => {
     it('treats a resolved material in another base as notFound (identity re-check)', async () => {
       const service = new KnowledgeService()
       // The relative path resolves, but the item lives in another base — refresh must not cross the
-      // identity boundary (same guard as deleteConcepts; refreshConcepts shares resolveConceptItemIds).
+      // identity boundary (same guard as deleteConcepts; refreshConcepts shares resolveConceptItems).
       arrangeResolvable('other-base')
 
       const result = await service.refreshConcepts('kb-1', [CONCEPT_ID])

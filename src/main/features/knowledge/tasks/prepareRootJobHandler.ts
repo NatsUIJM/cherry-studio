@@ -55,6 +55,7 @@ export function createPrepareRootJobHandler(
         return
       }
 
+      await pdfSplitService.assertDirectoryBundleCurrent(itemId, ctx.signal)
       cacheService.deleteShared(progressKey)
       // Drop stale expanded leaves before scanning so first attempts and retries stay idempotent.
       await deletePreviousLeafExpansion(baseId, itemId, knowledgeLockManager)

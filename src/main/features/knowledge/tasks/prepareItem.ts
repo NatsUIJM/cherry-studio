@@ -64,7 +64,9 @@ async function prepareDirectoryForRuntime(
   // shows the on-disk name (e.g. `docs_2`) and delete removes the shell by it.
   knowledgeItemService.updateDirectoryRelativePath(item.id, pathPrefix)
 
+  await pdfSplitService.assertDirectoryBundleCurrent(item.id, signal)
   const stagedSplits = pdfSplitService.getDirectorySplits(item.id)
+  const manifest = pdfSplitService.getDirectoryManifest(item.id)
   const stagedSplitBySource = new Map(stagedSplits.map((split) => [split.sourcePath, split]))
   const pdfSplitPublisher: DirectoryPdfSplitPublisher | undefined =
     stagedSplits.length > 0
@@ -104,9 +106,15 @@ async function prepareDirectoryForRuntime(
           }
         }
       : undefined
-  const children = pdfSplitPublisher
-    ? await expandDirectoryOwnerToTree(item, baseId, pathPrefix, signal, onDirectoryCopyProgress, pdfSplitPublisher)
-    : await expandDirectoryOwnerToTree(item, baseId, pathPrefix, signal, onDirectoryCopyProgress)
+  const children = await expandDirectoryOwnerToTree(
+    item,
+    baseId,
+    pathPrefix,
+    signal,
+    onDirectoryCopyProgress,
+    pdfSplitPublisher,
+    manifest
+  )
   signal.throwIfAborted()
 
   if (children.length === 0) {
