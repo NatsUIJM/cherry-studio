@@ -437,6 +437,9 @@ describe('AddKnowledgeItemDialog', () => {
       expect(await screen.findByRole('heading', { name: '拆分大型 PDF 文件' })).toBeInTheDocument()
       expect(screen.getByText('alpha.pdf')).toBeInTheDocument()
       expect(screen.getByText('31 页 · 1.0 MB · 2 个分片')).toBeInTheDocument()
+      expect(screen.queryByText('PDF 文件')).not.toBeInTheDocument()
+      expect(screen.queryByText('上传任务')).not.toBeInTheDocument()
+      expect(screen.queryByText('所需磁盘空间')).not.toBeInTheDocument()
       expect(onOpenChange).not.toHaveBeenCalledWith(false)
 
       fireEvent.click(screen.getByRole('button', { name: '拆分并上传' }))

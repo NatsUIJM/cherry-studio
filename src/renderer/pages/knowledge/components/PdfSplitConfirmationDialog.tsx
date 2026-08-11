@@ -10,7 +10,6 @@ import {
 import { getFileProcessorLabelKey } from '@renderer/i18n/label'
 import { formatFileSize } from '@renderer/utils/file'
 import type { KnowledgePdfSplitConfirmation } from '@shared/data/types/knowledge'
-import { FileText, HardDrive, ListChecks } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 interface PdfSplitConfirmationDialogProps {
@@ -47,32 +46,6 @@ const PdfSplitConfirmationDialog = ({
             {t('knowledge.data_source.pdf_split.description', { processor: processorName })}
           </DialogDescription>
         </DialogHeader>
-
-        <div className="grid shrink-0 grid-cols-3 divide-x divide-border border-border border-y py-3">
-          <div className="flex min-w-0 items-center gap-2 px-3 first:pl-0">
-            <FileText className="size-4 shrink-0 text-muted-foreground" />
-            <div className="min-w-0">
-              <div className="text-foreground-tertiary text-xs">{t('knowledge.data_source.pdf_split.files')}</div>
-              <div className="truncate font-medium text-sm">{confirmation.files.length}</div>
-            </div>
-          </div>
-          <div className="flex min-w-0 items-center gap-2 px-3">
-            <ListChecks className="size-4 shrink-0 text-muted-foreground" />
-            <div className="min-w-0">
-              <div className="text-foreground-tertiary text-xs">{t('knowledge.data_source.pdf_split.tasks')}</div>
-              <div className="truncate font-medium text-sm">{confirmation.totalTasks}</div>
-            </div>
-          </div>
-          <div className="flex min-w-0 items-center gap-2 px-3 pr-0">
-            <HardDrive className="size-4 shrink-0 text-muted-foreground" />
-            <div className="min-w-0">
-              <div className="truncate text-foreground-tertiary text-xs">
-                {t('knowledge.data_source.pdf_split.disk')}
-              </div>
-              <div className="truncate font-medium text-sm">{formatFileSize(confirmation.estimatedDiskBytes)}</div>
-            </div>
-          </div>
-        </div>
 
         <ul className="min-h-0 space-y-2 overflow-y-auto pr-1">
           {confirmation.files.map((file, index) => (
