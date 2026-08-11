@@ -2,8 +2,13 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 
 import { nextFreeKnowledgeRelativePath } from '@main/utils/knowledge'
-import type { DirectoryItemData, FileItemData, KnowledgeItem } from '@shared/data/types/knowledge'
-import { knowledgeSupportedFileExts } from '@shared/utils/file'
+import {
+  type DirectoryItemData,
+  type FileItemData,
+  type KnowledgeItem,
+  KnowledgeRelativePathSchema
+} from '@shared/data/types/knowledge'
+import { knowledgeSupportedFileExts, type PosixRelativeFilePath } from '@shared/utils/file'
 
 import { assertSafeKnowledgeRelativePath, copyFileIntoKnowledgeBaseAt } from '../../pathStorage'
 
@@ -32,7 +37,11 @@ export type ExpandedDirectoryNode =
 
 export interface DirectoryPdfSplitPublisher {
   hasSplit(sourcePath: string): boolean
-  publish(sourcePath: string, relativePrefix: string, signal: AbortSignal): Promise<ExpandedDirectoryNode>
+  publish(
+    sourcePath: string,
+    relativePrefix: PosixRelativeFilePath,
+    signal: AbortSignal
+  ): Promise<ExpandedDirectoryNode>
 }
 
 async function readDirectoryTree(
@@ -96,7 +105,7 @@ async function expandDirectoryNode(
     if (pdfSplitRelativePrefix && pdfSplitPublisher) {
       const published = await pdfSplitPublisher.publish(
         node.externalPath,
-        `${pathPrefix}/${pdfSplitRelativePrefix}`,
+        KnowledgeRelativePathSchema.parse(`${pathPrefix}/${pdfSplitRelativePrefix}`),
         signal
       )
       signal.throwIfAborted()
@@ -109,10 +118,15 @@ async function expandDirectoryNode(
     // basename across subdirectories don't collide and the hierarchy survives.
     // The whole tree resolves under the base material root (raw/) via the helper.
     const subtreePath = node.treePath.replace(/^\/+/, '')
+    // Both halves were guarded on their own (`pathPrefix` in expandDirectory,
+    // `treePath` by the tree layer), but the join is a new path — assert it here,
+    // which is also what brands it for `copyFileIntoKnowledgeBaseAt`.
+    const materialPath = `${pathPrefix}/${subtreePath}`
+    assertSafeKnowledgeRelativePath(materialPath)
     // Thread the abort signal so a hung single-file copy can be interrupted, and allow
     // overwrite so a retry after a mid-scan abort re-copies over its own leftover files
     // instead of failing on the pre-existing dest (see prepareRoot retry idempotency).
-    const relativePath = await copyFileIntoKnowledgeBaseAt(baseId, node.externalPath, `${pathPrefix}/${subtreePath}`, {
+    const relativePath = await copyFileIntoKnowledgeBaseAt(baseId, node.externalPath, materialPath, {
       signal,
       overwrite: true
     })
@@ -167,7 +181,10 @@ async function expandDirectoryNode(
  * container's `relativePath` BEFORE any byte is copied, making a mid-expansion crash
  * recoverable (the retry reclaims `raw/<pathPrefix>` from the pinned row).
  */
-export function chooseDirectoryPathPrefix(owner: KnowledgeItem, reservedTopLevelNames: Set<string>): string {
+export function chooseDirectoryPathPrefix(
+  owner: KnowledgeItem,
+  reservedTopLevelNames: Set<string>
+): PosixRelativeFilePath {
   if (owner.type !== 'directory') {
     throw new Error(`Knowledge item '${owner.id}' must be type 'directory', received '${owner.type}'`)
   }

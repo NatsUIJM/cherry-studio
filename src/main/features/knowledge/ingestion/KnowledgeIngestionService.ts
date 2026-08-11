@@ -27,12 +27,13 @@ import {
   type KnowledgePdfSplitConfirmation,
   type KnowledgeReindexItemsResult
 } from '@shared/data/types/knowledge'
-import { knowledgeSupportedFileExts } from '@shared/utils/file'
+import { knowledgeSupportedFileExts, type PosixRelativeFilePath } from '@shared/utils/file'
 
 import { assertBaseCanRunRuntimeOperation } from '../base/baseGuards'
 import { classifyKnowledgeItemSource } from '../items'
 import {
   assertKnowledgeFileTargetAvailable,
+  assertSafeKnowledgeRelativePath,
   collectKnowledgeReservedRelativePaths,
   copyFileIntoKnowledgeBaseAt,
   deleteKnowledgeItemFilesBestEffort,
@@ -949,7 +950,7 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
   }
 }
 
-function reservePdfSplitDirectoryRelativePath(sourcePath: string, reservedPaths: Set<string>): string {
+function reservePdfSplitDirectoryRelativePath(sourcePath: string, reservedPaths: Set<string>): PosixRelativeFilePath {
   const sourceName = path.basename(sourcePath)
   const proposed = path.parse(sourceName).name || 'document'
   const chosen = nextFreeKnowledgeRelativePath(
@@ -961,12 +962,18 @@ function reservePdfSplitDirectoryRelativePath(sourcePath: string, reservedPaths:
       ),
     false
   )
+  assertSafeKnowledgeRelativePath(chosen)
   reservedPaths.add(chosen)
   return chosen
 }
 
 function toPdfPartData(
-  parts: Array<{ fileName: string; relativePath: string; pageStart: number; pageEnd: number }>
+  parts: Array<{
+    fileName: string
+    relativePath: PosixRelativeFilePath
+    pageStart: number
+    pageEnd: number
+  }>
 ): Array<KnowledgeItemOf<'file'>['data']> {
   return parts.map((part, index) => ({
     source: part.fileName,

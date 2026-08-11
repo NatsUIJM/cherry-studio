@@ -6,6 +6,7 @@ import {
 import { toast } from '@renderer/services/toast'
 import { IpcError } from '@shared/ipc/errors/IpcError'
 import { knowledgeErrorCodes } from '@shared/ipc/errors/knowledge'
+import type { PosixRelativeFilePath } from '@shared/utils/file'
 import { mockRendererLoggerService } from '@test-mocks/RendererLoggerService'
 import { act, renderHook } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -169,7 +170,7 @@ describe('usePreviewKnowledgeSource', () => {
       data: {
         ...directory.data,
         pdfSplitSource: {
-          relativePath: 'raw/example/.source/example.pdf',
+          relativePath: 'raw/example/.source/example.pdf' as PosixRelativeFilePath,
           sourceName: 'example.pdf',
           totalPages: 31
         }
@@ -194,7 +195,7 @@ describe('usePreviewKnowledgeSource', () => {
     const item = createUrlItem({
       id: 'url-1',
       source: 'https://example.com/product-docs',
-      relativePath: 'Product Docs.md'
+      relativePath: 'Product Docs.md' as PosixRelativeFilePath
     })
 
     await act(async () => {
@@ -289,7 +290,7 @@ describe('usePreviewKnowledgeSource', () => {
         createUrlItem({
           id: 'url-1',
           source: 'https://example.com/product-docs',
-          relativePath: 'Product Docs.md'
+          relativePath: 'Product Docs.md' as PosixRelativeFilePath
         })
       )
     })

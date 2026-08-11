@@ -6,6 +6,7 @@ import { generateOrderKeyBetween } from '@data/services/utils/orderKey'
 import { ErrorCode } from '@shared/data/api/errors'
 import type { CreateKnowledgeItemDto } from '@shared/data/types/knowledge'
 import { createUniqueModelId } from '@shared/data/types/model'
+import type { PosixRelativeFilePath } from '@shared/utils/file'
 import { setupTestDatabase } from '@test-helpers/db'
 import { mockMainLoggerService } from '@test-mocks/MainLoggerService'
 import { eq } from 'drizzle-orm'
@@ -91,16 +92,16 @@ describe('KnowledgeItemService', () => {
     const slug = id.slice(0, 8)
     return {
       source: `/docs/${slug}.md`,
-      relativePath: `${slug}.md`
+      relativePath: `${slug}.md` as PosixRelativeFilePath
     }
   }
 
   describe('PDF split subtrees', () => {
     const parentData = {
       source: '/docs/report.pdf',
-      relativePath: 'report',
+      relativePath: 'report' as PosixRelativeFilePath,
       pdfSplitSource: {
-        relativePath: 'report/.source/report.pdf',
+        relativePath: 'report/.source/report.pdf' as PosixRelativeFilePath,
         sourceName: 'report.pdf',
         totalPages: 31
       }
@@ -108,12 +109,12 @@ describe('KnowledgeItemService', () => {
     const parts = [
       {
         source: 'report_0001-0030.pdf',
-        relativePath: 'report/report_0001-0030.pdf',
+        relativePath: 'report/report_0001-0030.pdf' as PosixRelativeFilePath,
         pdfPart: { partIndex: 1, pageStart: 1, pageEnd: 30 }
       },
       {
         source: 'report_0031-0031.pdf',
-        relativePath: 'report/report_0031-0031.pdf',
+        relativePath: 'report/report_0031-0031.pdf' as PosixRelativeFilePath,
         pdfPart: { partIndex: 2, pageStart: 31, pageEnd: 31 }
       }
     ]
@@ -141,7 +142,7 @@ describe('KnowledgeItemService', () => {
       await seedItem({
         id: FILE_A_ID,
         type: 'file',
-        data: { source: '/docs/report.pdf', relativePath: 'report.pdf' },
+        data: { source: '/docs/report.pdf', relativePath: 'report.pdf' as PosixRelativeFilePath },
         status: 'completed'
       })
 
@@ -745,7 +746,7 @@ describe('KnowledgeItemService', () => {
         type: 'file',
         data: {
           source: '/docs/a.md',
-          relativePath: 'a.md'
+          relativePath: 'a.md' as PosixRelativeFilePath
         }
       })
 
@@ -753,7 +754,7 @@ describe('KnowledgeItemService', () => {
         type: 'file',
         data: {
           source: '/docs/a.md',
-          relativePath: 'a.md'
+          relativePath: 'a.md' as PosixRelativeFilePath
         }
       })
     })
@@ -1345,7 +1346,7 @@ describe('KnowledgeItemService', () => {
         data: {
           source: `/docs/${FILE_A_ID.slice(0, 8)}.md`,
           relativePath: `${FILE_A_ID.slice(0, 8)}.md`,
-          indexedRelativePath: 'processed.md'
+          indexedRelativePath: 'processed.md' as PosixRelativeFilePath
         }
       })
     })
@@ -1397,7 +1398,7 @@ describe('KnowledgeItemService', () => {
         data: {
           source: 'https://example.com',
           url: 'https://example.com',
-          relativePath: 'example.md'
+          relativePath: 'example.md' as PosixRelativeFilePath
         }
       })
     })
@@ -1417,7 +1418,7 @@ describe('KnowledgeItemService', () => {
         data: {
           source: 'Meeting notes',
           content: '# Meeting\n\nbody',
-          relativePath: 'Meeting notes.md'
+          relativePath: 'Meeting notes.md' as PosixRelativeFilePath
         }
       })
     })
@@ -1486,7 +1487,7 @@ describe('KnowledgeItemService', () => {
         type: 'directory',
         data: {
           source: '/docs',
-          relativePath: 'docs'
+          relativePath: 'docs' as PosixRelativeFilePath
         }
       })
     })

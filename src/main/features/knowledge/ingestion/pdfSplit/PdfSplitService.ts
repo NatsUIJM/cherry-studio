@@ -13,8 +13,10 @@ import {
   KNOWLEDGE_PDF_SPLIT_PARTS_MAX,
   type KnowledgeAddItemInput,
   type KnowledgeItem,
-  type KnowledgePdfSplitConfirmation
+  type KnowledgePdfSplitConfirmation,
+  KnowledgeRelativePathSchema
 } from '@shared/data/types/knowledge'
+import type { PosixRelativeFilePath } from '@shared/utils/file'
 
 import { copyFileIntoKnowledgeBaseAt, getKnowledgeBaseFilePath } from '../../pathStorage'
 import { createInitialPdfPageRanges, formatPdfPartFileName, pdfNeedsSplitting } from './pdfSplitPlanning'
@@ -153,18 +155,20 @@ export class PdfSplitService {
   async publishStagedSplit(
     baseId: string,
     split: StagedPdfSplit,
-    relativePrefix: string,
+    relativePrefix: PosixRelativeFilePath,
     options: {
       signal?: AbortSignal
-      sourceAlreadyStoredRelativePath?: string
+      sourceAlreadyStoredRelativePath?: PosixRelativeFilePath
       overwrite?: boolean
     } = {}
   ): Promise<PublishedPdfSplit> {
     const sourceFileName = path.basename(split.sourcePath)
-    const sourceRelativePath = options.sourceAlreadyStoredRelativePath ?? `${relativePrefix}/.source/${sourceFileName}`
+    const sourceRelativePath =
+      options.sourceAlreadyStoredRelativePath ??
+      KnowledgeRelativePathSchema.parse(`${relativePrefix}/.source/${sourceFileName}`)
     const parts = split.parts.map((part) => {
       const fileName = formatPdfPartFileName(sourceFileName, part.pageStart, part.pageEnd, split.pageCount)
-      return { ...part, fileName, relativePath: `${relativePrefix}/${fileName}` }
+      return { ...part, fileName, relativePath: KnowledgeRelativePathSchema.parse(`${relativePrefix}/${fileName}`) }
     })
 
     if (options.sourceAlreadyStoredRelativePath) {
@@ -186,20 +190,26 @@ export class PdfSplitService {
       return { sourceRelativePath, parts }
     }
 
-    const stagedRelativePrefix = `${relativePrefix}.staged-${randomUUID()}`
+    const stagedRelativePrefix = KnowledgeRelativePathSchema.parse(`${relativePrefix}.staged-${randomUUID()}`)
     const stagedAbsolutePath = getKnowledgeBaseFilePath(baseId, stagedRelativePrefix)
     const finalAbsolutePath = getKnowledgeBaseFilePath(baseId, relativePrefix)
     try {
       await copyStagedFile(
         baseId,
         split.sourcePath,
-        `${stagedRelativePrefix}/.source/${sourceFileName}`,
+        KnowledgeRelativePathSchema.parse(`${stagedRelativePrefix}/.source/${sourceFileName}`),
         options.signal,
         true
       )
       for (const part of parts) {
         options.signal?.throwIfAborted()
-        await copyStagedFile(baseId, part.path, `${stagedRelativePrefix}/${part.fileName}`, options.signal, true)
+        await copyStagedFile(
+          baseId,
+          part.path,
+          KnowledgeRelativePathSchema.parse(`${stagedRelativePrefix}/${part.fileName}`),
+          options.signal,
+          true
+        )
       }
       if (options.overwrite) {
         await fsp.rm(finalAbsolutePath, { recursive: true, force: true })
@@ -546,7 +556,7 @@ async function hashFile(filePath: string): Promise<string> {
 async function copyStagedFile(
   baseId: string,
   sourcePath: string,
-  relativePath: string,
+  relativePath: PosixRelativeFilePath,
   signal: AbortSignal | undefined,
   overwrite: boolean
 ): Promise<void> {

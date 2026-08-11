@@ -5,6 +5,7 @@ import type {
   KnowledgeItem,
   KnowledgePdfSplitConfirmation
 } from '@shared/data/types/knowledge'
+import type { PosixRelativeFilePath } from '@shared/utils/file'
 
 export interface PdfPageRange {
   pageStart: number
@@ -45,8 +46,8 @@ export interface StagedPdfSplit {
 }
 
 export interface PublishedPdfSplit {
-  sourceRelativePath: string
-  parts: Array<StagedPdfPart & { fileName: string; relativePath: string }>
+  sourceRelativePath: PosixRelativeFilePath
+  parts: Array<StagedPdfPart & { fileName: string; relativePath: PosixRelativeFilePath }>
 }
 
 export interface PdfSplitBundle {
