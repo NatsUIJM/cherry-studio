@@ -1,6 +1,6 @@
 import { toast } from '@renderer/services/toast'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AddKnowledgeItemDialog from '../AddKnowledgeItemDialog'
 
@@ -30,6 +30,14 @@ const createSelectedFile = (name: string, path = `/picked/${name}`) => ({ name, 
 
 const createMockFile = (name: string, size: number) =>
   new File([new Uint8Array(size)], name, { type: 'application/octet-stream' })
+
+const createDeferred = <T,>() => {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
 
 vi.mock('../../KnowledgePageProvider', () => ({
   useKnowledgePage: () => mockUseKnowledgePage()
@@ -265,6 +273,8 @@ vi.mock('react-i18next', () => {
       'knowledge.data_source.pdf_split.confirm': '拆分并上传',
       'knowledge.data_source.pdf_split.description': '这些 PDF 超出 Doc2X 的稳定处理范围。',
       'knowledge.data_source.pdf_split.file_summary': `${options?.pages ?? 0} 页 · ${options?.size ?? ''} · ${options?.parts ?? 0} 个分片`,
+      'knowledge.data_source.pdf_split.preparing_description': '正在检查页数并生成本地分片，请稍候。',
+      'knowledge.data_source.pdf_split.preparing_title': '正在准备 PDF 拆分方案',
       'knowledge.data_source.pdf_split.title': '拆分大型 PDF 文件',
       'provider.doc2x': 'Doc2X'
     } satisfies Record<string, string>
@@ -276,6 +286,10 @@ vi.mock('react-i18next', () => {
 })
 
 describe('AddKnowledgeItemDialog', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   beforeEach(() => {
     vi.clearAllMocks()
     mockUseKnowledgePage.mockReturnValue({ selectedBaseId: 'base-1', pendingAddSource: 'file' })
@@ -447,6 +461,64 @@ describe('AddKnowledgeItemDialog', () => {
         )
       })
       await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+    })
+
+    it('shows delayed PDF preparation feedback and replaces it with the exact split plan', async () => {
+      vi.useFakeTimers()
+      const confirmation = createPdfSplitConfirmation()
+      const submission = createDeferred<{ status: 'split_confirmation_required'; confirmation: typeof confirmation }>()
+      mockFileSelect.mockResolvedValueOnce([createSelectedFile('alpha.pdf', '/docs/alpha.pdf')])
+      mockSubmitKnowledgeItems.mockReturnValueOnce(submission.promise)
+      render(<AddKnowledgeItemDialog open onOpenChange={vi.fn()} />)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(249)
+      })
+      expect(screen.queryByRole('heading', { name: '正在准备 PDF 拆分方案' })).not.toBeInTheDocument()
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1)
+      })
+      expect(screen.getByRole('heading', { name: '正在准备 PDF 拆分方案' })).toBeInTheDocument()
+      expect(screen.getByText('alpha.pdf')).toBeInTheDocument()
+      expect(screen.getByText('正在检查页数并生成本地分片，请稍候。')).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: '拆分并上传' })).not.toBeInTheDocument()
+
+      await act(async () => {
+        submission.resolve({ status: 'split_confirmation_required', confirmation })
+        await Promise.resolve()
+      })
+
+      expect(screen.getByRole('heading', { name: '拆分大型 PDF 文件' })).toBeInTheDocument()
+      expect(screen.getByText('31 页 · 1.0 MB · 2 个分片')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '拆分并上传' })).toBeEnabled()
+    })
+
+    it.each([
+      { name: 'quick PDF', file: createSelectedFile('alpha.pdf'), resolvesImmediately: true },
+      { name: 'slow non-PDF', file: createSelectedFile('notes.txt'), resolvesImmediately: false }
+    ])('does not show PDF preparation feedback for a $name submission', async ({ file, resolvesImmediately }) => {
+      vi.useFakeTimers()
+      const submission = createDeferred<{ status: 'added' }>()
+      mockFileSelect.mockResolvedValueOnce([file])
+      mockSubmitKnowledgeItems.mockReturnValueOnce(submission.promise)
+      render(<AddKnowledgeItemDialog open onOpenChange={vi.fn()} />)
+
+      if (resolvesImmediately) {
+        await act(async () => {
+          submission.resolve({ status: 'added' })
+          await Promise.resolve()
+        })
+      }
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250)
+      })
+
+      expect(screen.queryByRole('heading', { name: '正在准备 PDF 拆分方案' })).not.toBeInTheDocument()
+      await act(async () => {
+        submission.resolve({ status: 'added' })
+        await Promise.resolve()
+      })
     })
 
     it('discards the split token and adds nothing when confirmation is cancelled', async () => {

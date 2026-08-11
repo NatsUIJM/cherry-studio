@@ -239,7 +239,11 @@ const KnowledgePageDetailSection = () => {
       </PageSidePanel>
 
       <PdfSplitConfirmationDialog
-        confirmation={pendingReindexPdfSplit?.confirmation ?? null}
+        state={
+          pendingReindexPdfSplit
+            ? { status: 'ready', confirmation: pendingReindexPdfSplit.confirmation }
+            : { status: 'closed' }
+        }
         errorMessage={reindexPdfSplitError}
         isConfirming={isConfirmingReindexPdfSplit}
         onConfirm={handleConfirmReindexPdfSplit}

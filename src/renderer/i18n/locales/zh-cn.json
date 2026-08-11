@@ -3151,6 +3151,8 @@
         "confirm": "拆分并上传",
         "description": "这些 PDF 超出 {{processor}} 的稳定处理范围。Cherry Studio 将保留原文件，并把每个分片作为独立知识项上传。",
         "file_summary": "{{pages}} 页 · {{size}} · {{parts}} 个分片",
+        "preparing_description": "正在检查页数并生成本地分片，请稍候。",
+        "preparing_title": "正在准备 PDF 拆分方案",
         "title": "拆分大型 PDF 文件"
       },
       "preview": {

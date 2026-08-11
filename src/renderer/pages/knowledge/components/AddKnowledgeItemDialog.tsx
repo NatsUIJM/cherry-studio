@@ -5,12 +5,13 @@ import { toast } from '@renderer/services/toast'
 import { formatErrorMessageWithPrefix } from '@renderer/utils/error'
 import { getFileExtension } from '@renderer/utils/file'
 import { resolveKnowledgeFileData, resolveKnowledgeFileMetadataEntryData } from '@renderer/utils/knowledgeFileEntry'
-import type {
-  KnowledgeAddConflictStrategy,
-  KnowledgeAddItemConflict,
-  KnowledgeAddItemInput,
-  KnowledgeItemType,
-  KnowledgePdfSplitConfirmation
+import {
+  getKnowledgePathBasename,
+  type KnowledgeAddConflictStrategy,
+  type KnowledgeAddItemConflict,
+  type KnowledgeAddItemInput,
+  type KnowledgeItemType,
+  type KnowledgePdfSplitConfirmation
 } from '@shared/data/types/knowledge'
 import { knowledgeSupportedFileExts } from '@shared/utils/file'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -23,9 +24,10 @@ import AddKnowledgeItemDialogSourceTabs from './addKnowledgeItemDialog/AddKnowle
 import { DEFAULT_SOURCE_TYPE, KNOWLEDGE_ADD_ITEMS_MAX } from './addKnowledgeItemDialog/constants'
 import KnowledgeAddConflictDialog from './addKnowledgeItemDialog/KnowledgeAddConflictDialog'
 import type { NoteDraft, NoteItem, NoteSourceMode } from './addKnowledgeItemDialog/types'
-import PdfSplitConfirmationDialog from './PdfSplitConfirmationDialog'
+import PdfSplitConfirmationDialog, { type PdfSplitConfirmationDialogState } from './PdfSplitConfirmationDialog'
 
 type ConflictResolution = 'rename' | 'replace'
+const PDF_SPLIT_PREPARING_DELAY_MS = 250
 
 const logger = loggerService.withContext('AddKnowledgeItemDialog')
 
@@ -34,11 +36,14 @@ interface PendingConflictState {
   conflicts: KnowledgeAddItemConflict[]
 }
 
-interface PendingPdfSplitState {
+interface ReadyPdfSplitState {
+  status: 'ready'
   confirmation: KnowledgePdfSplitConfirmation
   conflictStrategy: KnowledgeAddConflictStrategy
   items: KnowledgeAddItemInput[]
 }
+
+type PdfSplitFlowState = Exclude<PdfSplitConfirmationDialogState, { status: 'ready' }> | ReadyPdfSplitState
 
 interface AddKnowledgeItemDialogProps {
   open: boolean
@@ -82,10 +87,20 @@ const AddKnowledgeItemDialog = ({ open, onOpenChange }: AddKnowledgeItemDialogPr
   const [isResolvingSubmit, setIsResolvingSubmit] = useState(false)
   const [pendingConflict, setPendingConflict] = useState<PendingConflictState | null>(null)
   const [pendingResolution, setPendingResolution] = useState<ConflictResolution | null>(null)
-  const [pendingPdfSplit, setPendingPdfSplit] = useState<PendingPdfSplitState | null>(null)
+  const [pdfSplitFlow, setPdfSplitFlow] = useState<PdfSplitFlowState>({ status: 'closed' })
   const [pdfSplitErrorMessage, setPdfSplitErrorMessage] = useState('')
   const [isConfirmingPdfSplit, setIsConfirmingPdfSplit] = useState(false)
+  const pdfSplitPreparingTimerRef = useRef<number | null>(null)
   const { submit: submitKnowledgeItems, isSubmitting: isSubmittingItems } = useAddKnowledgeItems(selectedBaseId)
+
+  const clearPdfSplitPreparingTimer = useCallback(() => {
+    if (pdfSplitPreparingTimerRef.current !== null) {
+      window.clearTimeout(pdfSplitPreparingTimerRef.current)
+      pdfSplitPreparingTimerRef.current = null
+    }
+  }, [])
+
+  useEffect(() => clearPdfSplitPreparingTimer, [clearPdfSplitPreparingTimer])
 
   const handleOpenChange = useCallback(
     (nextOpen: boolean) => {
@@ -199,23 +214,47 @@ const AddKnowledgeItemDialog = ({ open, onOpenChange }: AddKnowledgeItemDialogPr
       conflictStrategy: 'detect' | ConflictResolution,
       splitConfirmationToken?: string
     ) => {
-      const result = splitConfirmationToken
-        ? await submitKnowledgeItems(items, conflictStrategy, splitConfirmationToken)
-        : await submitKnowledgeItems(items, conflictStrategy)
+      const pdfFileNames = splitConfirmationToken
+        ? []
+        : items.flatMap((item) =>
+            item.type === 'file' && getFileExtension(item.data.path) === '.pdf'
+              ? [getKnowledgePathBasename(item.data.path)]
+              : []
+          )
+      if (pdfFileNames.length > 0) {
+        clearPdfSplitPreparingTimer()
+        pdfSplitPreparingTimerRef.current = window.setTimeout(() => {
+          pdfSplitPreparingTimerRef.current = null
+          setPdfSplitFlow({ status: 'preparing', fileNames: pdfFileNames })
+        }, PDF_SPLIT_PREPARING_DELAY_MS)
+      }
+
+      let result
+      try {
+        result = splitConfirmationToken
+          ? await submitKnowledgeItems(items, conflictStrategy, splitConfirmationToken)
+          : await submitKnowledgeItems(items, conflictStrategy)
+      } catch (error) {
+        clearPdfSplitPreparingTimer()
+        if (pdfFileNames.length > 0) setPdfSplitFlow({ status: 'closed' })
+        throw error
+      }
+      clearPdfSplitPreparingTimer()
       if (result.status === 'conflicts') {
+        setPdfSplitFlow({ status: 'closed' })
         setPendingConflict({ items, conflicts: result.conflicts })
         return
       }
       setPendingConflict(null)
       if (result.status === 'split_confirmation_required') {
         setPdfSplitErrorMessage('')
-        setPendingPdfSplit({ items, conflictStrategy, confirmation: result.confirmation })
+        setPdfSplitFlow({ status: 'ready', items, conflictStrategy, confirmation: result.confirmation })
         return
       }
-      setPendingPdfSplit(null)
+      setPdfSplitFlow({ status: 'closed' })
       handleOpenChange(false)
     },
-    [handleOpenChange, submitKnowledgeItems]
+    [clearPdfSplitPreparingTimer, handleOpenChange, submitKnowledgeItems]
   )
 
   const handleSubmit = useCallback(() => {
@@ -362,21 +401,21 @@ const AddKnowledgeItemDialog = ({ open, onOpenChange }: AddKnowledgeItemDialogPr
   }, [directPick, handleOpenChange])
 
   const handlePdfSplitConfirm = useCallback(() => {
-    if (!pendingPdfSplit || isConfirmingPdfSplit) return
+    if (pdfSplitFlow.status !== 'ready' || isConfirmingPdfSplit) return
 
     setPdfSplitErrorMessage('')
     setIsConfirmingPdfSplit(true)
-    void submitWithStrategy(pendingPdfSplit.items, pendingPdfSplit.conflictStrategy, pendingPdfSplit.confirmation.token)
+    void submitWithStrategy(pdfSplitFlow.items, pdfSplitFlow.conflictStrategy, pdfSplitFlow.confirmation.token)
       .catch((error) => {
         setPdfSplitErrorMessage(formatErrorMessageWithPrefix(error, t('knowledge.data_source.add_dialog.submit.error')))
       })
       .finally(() => setIsConfirmingPdfSplit(false))
-  }, [isConfirmingPdfSplit, pendingPdfSplit, submitWithStrategy, t])
+  }, [isConfirmingPdfSplit, pdfSplitFlow, submitWithStrategy, t])
 
   const handlePdfSplitCancel = useCallback(() => {
-    if (!pendingPdfSplit || isConfirmingPdfSplit) return
-    const token = pendingPdfSplit.confirmation.token
-    setPendingPdfSplit(null)
+    if (pdfSplitFlow.status !== 'ready' || isConfirmingPdfSplit) return
+    const token = pdfSplitFlow.confirmation.token
+    setPdfSplitFlow({ status: 'closed' })
     setPdfSplitErrorMessage('')
     void discardKnowledgePdfSplitConfirmation(token).catch((error) => {
       logger.warn('Failed to discard PDF split confirmation', {
@@ -385,7 +424,7 @@ const AddKnowledgeItemDialog = ({ open, onOpenChange }: AddKnowledgeItemDialogPr
       })
     })
     handleOpenChange(false)
-  }, [handleOpenChange, isConfirmingPdfSplit, pendingPdfSplit])
+  }, [handleOpenChange, isConfirmingPdfSplit, pdfSplitFlow])
 
   const isSubmitting = isResolvingSubmit || isSubmittingItems
 
@@ -437,7 +476,7 @@ const AddKnowledgeItemDialog = ({ open, onOpenChange }: AddKnowledgeItemDialogPr
         onCancel={handleConflictCancel}
       />
       <PdfSplitConfirmationDialog
-        confirmation={pendingPdfSplit?.confirmation ?? null}
+        state={pdfSplitFlow}
         errorMessage={pdfSplitErrorMessage}
         isConfirming={isConfirmingPdfSplit}
         onConfirm={handlePdfSplitConfirm}
