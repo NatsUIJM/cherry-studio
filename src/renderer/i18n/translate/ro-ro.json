@@ -3124,15 +3124,6 @@
         "end_reached": "Nu mai sunt elemente",
         "loading_more": "Se încarcă mai multe…"
       },
-      "pdf_split": {
-        "confirm": "[to be translated]:Split and upload",
-        "description": "[to be translated]:These PDFs exceed the safe limit for {{processor}}. Cherry Studio will keep the originals and upload each part as an independent knowledge item.",
-        "disk": "[to be translated]:Required disk space",
-        "file_summary": "[to be translated]:{{pages}} pages · {{size}} · {{parts}} parts",
-        "files": "[to be translated]:PDF files",
-        "tasks": "[to be translated]:Upload tasks",
-        "title": "[to be translated]:Split large PDF files"
-      },
       "preview": {
         "failed": "Nu s-a reușit previzualizarea sursei",
         "unavailable": "Această sursă de date nu are nicio sursă pentru previzualizare."
@@ -3144,9 +3135,7 @@
         "embedding": "Embedding",
         "error": "Eroare",
         "pending": "Așteptare",
-        "provider_timeout": "[to be translated]:Provider timed out",
-        "ready": "Gata",
-        "size_exceeded": "[to be translated]:Exceeds {{limit}}"
+        "ready": "Gata"
       },
       "table": {
         "aria_label": "Surse de date",

@@ -3124,15 +3124,6 @@
         "end_reached": "Plus d'articles",
         "loading_more": "Chargement en cours…"
       },
-      "pdf_split": {
-        "confirm": "[to be translated]:Split and upload",
-        "description": "[to be translated]:These PDFs exceed the safe limit for {{processor}}. Cherry Studio will keep the originals and upload each part as an independent knowledge item.",
-        "disk": "[to be translated]:Required disk space",
-        "file_summary": "[to be translated]:{{pages}} pages · {{size}} · {{parts}} parts",
-        "files": "[to be translated]:PDF files",
-        "tasks": "[to be translated]:Upload tasks",
-        "title": "[to be translated]:Split large PDF files"
-      },
       "preview": {
         "failed": "Échec de l'aperçu de la source",
         "unavailable": "Cette source de données n'a aucune source à prévisualiser"
@@ -3144,9 +3135,7 @@
         "embedding": "Embedding",
         "error": "Erreur",
         "pending": "En attente",
-        "provider_timeout": "[to be translated]:Provider timed out",
-        "ready": "Prêt",
-        "size_exceeded": "[to be translated]:Exceeds {{limit}}"
+        "ready": "Prêt"
       },
       "table": {
         "aria_label": "Sources de données",
