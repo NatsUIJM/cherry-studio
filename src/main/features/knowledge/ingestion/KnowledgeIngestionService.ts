@@ -75,7 +75,12 @@ const DELETE_RECOVERY_ROOT_CHUNK_SIZE = 500
  * not the full `KnowledgeIngestionService`.
  */
 export interface KnowledgeItemScheduler {
-  scheduleItem(baseId: KnowledgeBaseId, itemId: KnowledgeItemId, parentJobId?: string | null): Promise<void>
+  scheduleItem(
+    baseId: KnowledgeBaseId,
+    itemId: KnowledgeItemId,
+    parentJobId?: string | null,
+    options?: { forceFileProcessing?: boolean }
+  ): Promise<void>
   scheduleIndexing(baseId: KnowledgeBaseId, itemId: KnowledgeItemId, parentJobId?: string | null): Promise<void>
   scheduleFileProcessingCheck(
     baseId: KnowledgeBaseId,
@@ -454,7 +459,8 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
   async scheduleItem(
     baseId: KnowledgeBaseId,
     itemId: KnowledgeItemId,
-    parentJobId: string | null = null
+    parentJobId: string | null = null,
+    options: { forceFileProcessing?: boolean } = {}
   ): Promise<void> {
     const base = knowledgeBaseService.getById(baseId)
     const item = knowledgeItemService.getById(itemId)
@@ -465,7 +471,7 @@ export class KnowledgeIngestionService implements KnowledgeItemScheduler {
       return
     }
 
-    const plan = planKnowledgeItemSource(base, item)
+    const plan = planKnowledgeItemSource(base, item, options)
     if (plan.kind === 'invalid') {
       knowledgeItemService.updateStatus(itemId, 'failed', { error: plan.reason })
       return

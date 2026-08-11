@@ -1563,17 +1563,23 @@ describe('KnowledgeService', () => {
   it('passes the parent job when starting file processing during reindex', async () => {
     const service = new KnowledgeService()
     const processingFile = createFileItem('file-1', 'kb-1', '/docs/source.pdf', 'processing')
+    processingFile.data.indexedRelativePath = 'source.md'
     knowledgeBaseGetByIdMock.mockReturnValue(createBase({ fileProcessorId: 'doc2x' }))
     knowledgeItemGetByIdMock.mockReturnValueOnce(processingFile)
 
     const ingestionService = (
       service as unknown as {
         ingestionService: {
-          scheduleItem(baseId: string, itemId: string, parentJobId?: string | null): Promise<void>
+          scheduleItem(
+            baseId: string,
+            itemId: string,
+            parentJobId?: string | null,
+            options?: { forceFileProcessing?: boolean }
+          ): Promise<void>
         }
       }
     ).ingestionService
-    await ingestionService.scheduleItem('kb-1', 'file-1', 'reindex-job')
+    await ingestionService.scheduleItem('kb-1', 'file-1', 'reindex-job', { forceFileProcessing: true })
 
     expect(fileProcessingStartJobMock).toHaveBeenCalledWith(
       {

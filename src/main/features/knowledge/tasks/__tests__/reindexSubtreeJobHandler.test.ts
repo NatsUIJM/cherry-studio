@@ -22,6 +22,7 @@ import {
   listMock,
   loggerWarnMock,
   probeKnowledgeSourcePathMock,
+  PROCESSED_RELATIVE_PATH,
   scheduleItemMock
 } from './jobHandlerTestUtils'
 
@@ -214,6 +215,24 @@ describe('reindex-subtree job handler', () => {
     expect(deleteItemsByIdsMock).not.toHaveBeenCalled()
     expect(knowledgeItemUpdateStatusMock).toHaveBeenCalledWith('note-1', 'processing')
     expect(scheduleItemMock).toHaveBeenCalledWith('kb-1', 'note-1', 'reindex-job')
+  })
+
+  it('forces a selected file root through its processor when rescheduling', async () => {
+    const handler = createReindexSubtreeJobHandler(knowledgeLockManager as never, ingestionService)
+    const root = createFileItem(FILE_ITEM_ID)
+    root.data.indexedRelativePath = PROCESSED_RELATIVE_PATH
+    knowledgeItemGetSubtreeItemsMock.mockImplementation(
+      (_baseId: string, _rootIds: string[], options: { includeRoots?: boolean; leafOnly?: boolean } = {}) => {
+        if (options.leafOnly || options.includeRoots) return [root]
+        return []
+      }
+    )
+
+    await handler.execute(createCtx({ baseId: 'kb-1', rootItemIds: [FILE_ITEM_ID] }, 'reindex-job'))
+
+    expect(scheduleItemMock).toHaveBeenCalledWith('kb-1', FILE_ITEM_ID, 'reindex-job', {
+      forceFileProcessing: true
+    })
   })
 
   it('marks only unscheduled reset roots failed when rescheduling fails', async () => {
