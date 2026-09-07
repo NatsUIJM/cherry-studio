@@ -444,8 +444,11 @@ describe('RightPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'common.close_sidebar' }))
 
     expect(screen.getByTestId('right-pane-host')).toHaveAttribute('data-open', 'false')
-    expect(closeTooltip).toHaveAttribute('data-disabled', 'true')
-  })
+
+    const updatedCloseTooltip = screen
+      .getAllByTestId('tooltip-trigger')
+      .find((node) => node.getAttribute('data-content') === 'common.close_sidebar')
+    expect(updatedCloseTooltip).toHaveAttribute('data-disabled', 'true')
 
   it('keeps shell controls available when a content-composed panel fails to render', () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
