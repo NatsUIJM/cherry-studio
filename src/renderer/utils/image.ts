@@ -315,6 +315,43 @@ async function withExpandedForCapture<T>(el: HTMLElement, fn: () => Promise<T>):
 }
 
 /**
+ * Interactive HTML artifacts are intentionally omitted from image exports (the
+ * clone path's `filter` drops them). The compositor rasterizes the live DOM, so
+ * there is no clone to filter — hide them for the duration of the shot instead.
+ */
+function hideHtmlArtifactsForCapture(el: HTMLElement): () => void {
+  const restored: Array<[HTMLElement, string]> = []
+  el.querySelectorAll<HTMLElement>('[data-html-artifact]').forEach((node) => {
+    restored.push([node, node.style.display])
+    node.style.display = 'none'
+  })
+  return () => restored.forEach(([node, display]) => (node.style.display = display))
+}
+
+/**
+ * Offscreen-parked capture roots (the topic export surface sits at `fixed`
+ * left:-10000px to stay invisible) cannot be shot in place: the composited
+ * surface only covers the document, and a negative-origin clip comes back
+ * clamped to the document origin — wrong pixels, not an error. Park the
+ * element at the end of the document for the capture instead. The rendered
+ * width is pinned in px first so re-anchoring to a different containing block
+ * cannot reflow the content. Returns a restore thunk, or null when the element
+ * already sits at non-negative page coordinates.
+ */
+function parkOffscreenElementForCapture(el: HTMLElement): (() => void) | null {
+  const rootRect = document.documentElement.getBoundingClientRect()
+  const rect = el.getBoundingClientRect()
+  if (rect.left - rootRect.left >= 0 && rect.top - rootRect.top >= 0) return null
+
+  const parked = { position: el.style.position, left: el.style.left, top: el.style.top, width: el.style.width }
+  el.style.position = 'absolute'
+  el.style.left = '0px'
+  el.style.top = `${document.documentElement.scrollHeight}px`
+  el.style.width = `${rect.width}px`
+  return () => Object.assign(el.style, parked)
+}
+
+/**
  * Rasterize `el` through Chromium's own compositor (CDP Page.captureScreenshot,
  * captureBeyondViewport). This is pixel-faithful to what the page renders —
  * fonts, layout and effects are the live page's, not a re-serialized clone.
@@ -335,6 +372,8 @@ async function captureNativeDataUrl(el: HTMLElement): Promise<string | undefined
     physical(clip.height) <= MAX_NATIVE_CAPTURE_PHYSICAL_DIMENSION
 
   el.setAttribute(IMAGE_CAPTURE_ATTRIBUTE, '')
+  const restoreArtifacts = hideHtmlArtifactsForCapture(el)
+  const restoreParking = parkOffscreenElementForCapture(el)
   try {
     // Webfonts are already rendered by the live page, but capture-only CSS may
     // reveal content that has not loaded fonts/images yet — keep the same
@@ -346,11 +385,15 @@ async function captureNativeDataUrl(el: HTMLElement): Promise<string | undefined
 
     return await withExpandedForCapture(el, async () => {
       const clip = computeCaptureClip(el)
-      if (!clip || !withinLimits(clip)) return undefined
+      // A parked element that still measures off-document after repositioning
+      // cannot be served natively — fall back rather than capture wrong pixels.
+      if (!clip || clip.x < 0 || clip.y < 0 || !withinLimits(clip)) return undefined
       const { dataUrl } = await ipcApi.request('window.capture_screenshot', { clip, scale: CAPTURE_SCALE })
       return dataUrl
     })
   } finally {
+    restoreParking?.()
+    restoreArtifacts()
     el.removeAttribute(IMAGE_CAPTURE_ATTRIBUTE)
   }
 }

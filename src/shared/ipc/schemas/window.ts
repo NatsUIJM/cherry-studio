@@ -42,7 +42,10 @@ export const windowRequestSchemas = {
   // renders: same fonts, same layout, no re-serialization. `clip` is in CSS
   // layout pixels in page space (not viewport space); `scale` is an extra
   // multiplier on top of the window's device scale factor (1 = on-screen
-  // pixel density).
+  // pixel density). Clip origins must be non-negative: the composited surface
+  // only covers the document, and Chromium answers a negative-origin clip with
+  // the region clamped to the document origin — wrong pixels, silently — so
+  // such requests are rejected here rather than served from the wrong region.
   'window.capture_screenshot': defineRoute({
     input: z.object({
       clip: z.object({

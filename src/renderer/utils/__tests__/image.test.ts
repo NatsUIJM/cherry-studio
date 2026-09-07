@@ -899,6 +899,73 @@ describe('utils/image', () => {
       expect(htmlToImage.toCanvas).toHaveBeenCalled()
     })
 
+    it('parks an offscreen capture root at positive page coordinates before the native shot', async () => {
+      const div = document.createElement('div')
+      Object.defineProperty(div, 'scrollWidth', { value: 300, configurable: true })
+      Object.defineProperty(div, 'scrollHeight', { value: 150, configurable: true })
+      // First measure decides the parking (negative origin), second measures
+      // the clip after the element has been repositioned into the document.
+      const rects = [rect(-10000, 0, 300, 150), rect(0, 6000, 300, 150)]
+      div.getBoundingClientRect = vi.fn(() => rects.shift() ?? rect(0, 6000, 300, 150))
+      document.documentElement.getBoundingClientRect = () => rect(0, 0, 4000, 3000)
+      Object.defineProperty(document.documentElement, 'scrollHeight', { value: 6000, configurable: true })
+      ipcMocks.request.mockImplementation(async (_route: string, payload: { clip: { x: number; y: number } }) => {
+        // The compositor answers negative-origin clips with the document
+        // origin region (wrong pixels), so the shot must only fire parked.
+        expect(payload.clip).toMatchObject({ x: 0, y: 6000 })
+        expect(div.style.position).toBe('absolute')
+        expect(div.style.width).toBe('300px')
+        return { dataUrl: 'data:image/png;base64,bmF0aXZl' }
+      })
+
+      try {
+        const result = await captureScrollableAsDataUrl({ current: div })
+
+        expect(result).toBe('data:image/png;base64,bmF0aXZl')
+        expect(htmlToImage.toCanvas).not.toHaveBeenCalled()
+        expect(div.style.position).toBe('')
+        expect(div.style.left).toBe('')
+        expect(div.style.top).toBe('')
+        expect(div.style.width).toBe('')
+      } finally {
+        Reflect.deleteProperty(document.documentElement, 'scrollHeight')
+      }
+    })
+
+    it('falls back to html-to-image when a parked element still measures off-document', async () => {
+      const div = document.createElement('div')
+      Object.defineProperty(div, 'scrollWidth', { value: 300, configurable: true })
+      Object.defineProperty(div, 'scrollHeight', { value: 150, configurable: true })
+      div.getBoundingClientRect = () => rect(-10000, 0, 300, 150)
+      document.documentElement.getBoundingClientRect = () => rect(0, 0, 4000, 3000)
+
+      const result = await captureScrollableAsDataUrl({ current: div })
+
+      expect(ipcMocks.request).not.toHaveBeenCalled()
+      expect(result).toBe('data:image/png;base64,xxx')
+      expect(htmlToImage.toCanvas).toHaveBeenCalled()
+      expect(div.style.position).toBe('')
+      expect(div.style.width).toBe('')
+    })
+
+    it('hides interactive HTML artifacts during the native capture and restores them afterwards', async () => {
+      const div = document.createElement('div')
+      const artifact = document.createElement('div')
+      artifact.setAttribute('data-html-artifact', '')
+      div.appendChild(artifact)
+      stubGeometry(div, 800, 600)
+      document.documentElement.getBoundingClientRect = () => rect(0, 0, 4000, 3000)
+      ipcMocks.request.mockImplementation(async () => {
+        expect(artifact.style.display).toBe('none')
+        return { dataUrl: 'data:image/png;base64,bmF0aXZl' }
+      })
+
+      const result = await captureScrollableAsDataUrl({ current: div })
+
+      expect(result).toBe('data:image/png;base64,bmF0aXZl')
+      expect(artifact.style.display).toBe('')
+    })
+
     it('skips the native path for an element with no measurable size', async () => {
       const div = document.createElement('div')
 
