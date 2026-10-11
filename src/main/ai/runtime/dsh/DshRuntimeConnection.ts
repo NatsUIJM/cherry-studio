@@ -144,6 +144,9 @@ export class DshRuntimeConnection implements AgentRuntimeConnection {
   private startPromise?: Promise<this>
   private closePromise?: Promise<void>
   private turnActive = false
+  /** True from a pinned connect until the replay's own turn goes active: the turn is live but not
+   *  marked yet, so a reconcile in that window must keep the frozen mode and only tighten tools. */
+  private replayTurnPending = false
   private backgroundChildrenActive = false
   private backgroundWorkActive = false
   private idleBoundary?: SessionEvent['seq']
@@ -218,6 +221,8 @@ export class DshRuntimeConnection implements AgentRuntimeConnection {
   private markTurnActive(): void {
     if (!this.turnActive) this.turnEpoch += 1
     this.turnActive = true
+    // The live-turn flag owns the freeze from here on; the replay's pre-turn window is over.
+    this.replayTurnPending = false
   }
 
   private buildSubagentSink(): DshSubagentSink {
@@ -326,6 +331,7 @@ export class DshRuntimeConnection implements AgentRuntimeConnection {
     this.disabledTools = this.input.permissionPolicy
       ? new Set(this.input.permissionPolicy.disabledTools)
       : normalizeDisabledTools(agent.disabledTools)
+    this.replayTurnPending = this.input.permissionPolicy !== undefined
     const injection = await resolveInjection(snapshot)
     this.modelId = injection.modelId
     this.contextWindow = injection.modelConfig.contextWindow
@@ -597,12 +603,12 @@ export class DshRuntimeConnection implements AgentRuntimeConnection {
     const nextPermissionMode = toBridgePermissionMode(agent.configuration?.permission_mode)
     const sandboxBoundaryChanged = isBypassMode(nextPermissionMode) !== isBypassMode(this.permissionMode)
     // A mode change can alter admission for the live tool loop, so defer it to idle.
-    // Disabled tools only tighten policy and still push immediately below.
-    const applicablePermissionMode = this.turnActive ? this.permissionMode : nextPermissionMode
+    // Disabled tools only tighten policy and still push immediately below. A replaying turn
+    // is live before its own send marks it active, so that pending window counts as mid-turn.
+    const midTurn = this.turnActive || this.replayTurnPending
+    const applicablePermissionMode = midTurn ? this.permissionMode : nextPermissionMode
     const nextDisabledTools = normalizeDisabledTools(agent.disabledTools)
-    const applicableDisabledTools = this.turnActive
-      ? new Set([...this.disabledTools, ...nextDisabledTools])
-      : nextDisabledTools
+    const applicableDisabledTools = midTurn ? new Set([...this.disabledTools, ...nextDisabledTools]) : nextDisabledTools
     const policyChanged =
       applicablePermissionMode !== this.permissionMode || !setsEqual(applicableDisabledTools, this.disabledTools)
     const planBoundaryChanged = (applicablePermissionMode === 'plan') !== (this.permissionMode === 'plan')
