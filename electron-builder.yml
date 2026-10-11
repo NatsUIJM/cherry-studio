@@ -32,6 +32,7 @@ files:
   - "!**/{tsconfig.json,tsconfig.tsbuildinfo,tsconfig.node.json,tsconfig.web.json}"
   - "!**/{.editorconfig,.jekyll-metadata}"
   - "!src"
+  - "!native"
   - "!config"
   - "!patches"
   - "!**/node_modules/**/*.cpp"
@@ -64,6 +65,9 @@ files:
   - "!node_modules/@tavily/core/node_modules/js-tiktoken"
   - "!node_modules/pdf-parse/lib/pdf.js/{v1.9.426,v1.10.88,v2.0.550}"
   - "!node_modules/mammoth/{mammoth.browser.js,mammoth.browser.min.js}"
+  - "!**/node_modules/better-sqlite3/{bin,deps,src}/**"
+  - "!**/node_modules/better-sqlite3/build/{Debug,Release/obj}/**"
+  - "!**/node_modules/{selection-hook,@earendil-works/pi-coding-agent}/docs/**"
   # node-gyp-build prefers build/Release over prebuilds/, so ship the prebuilds and drop the
   # host-arch rebuild — a cross-built arm64 package would otherwise load the x86-64 binary (#20530).
   - "!node_modules/selection-hook/build/**"
@@ -79,6 +83,7 @@ files:
   - "!**/*.{h,iobj,ipdb,tlog,recipe,vcxproj,vcxproj.filters,Makefile,*.Makefile}" # filter .node build files
   - "resources/**/*" # include all files in resources, and unpack them from asar for runtime access
   - "!resources/devtools/**" # dev-only extensions are loaded from source in development
+  - "node_modules/@deepseek-ai/dsh-sandbox-windows-acl/assets/**"
 asarUnpack:
   - resources/**
   - "!resources/devtools/**"
@@ -95,7 +100,16 @@ asarUnpack:
   - "node_modules/@koromix/koffi-*/**"
   - "node_modules/@deepseek-ai/dsh-sandbox-windows-acl/**"
   - "node_modules/@deepseek-ai/dsh-win32-process/**"
-  - "node_modules/@deepseek-ai/node-addon-landlock-run*/**"
+  - "node_modules/@deepseek-ai/dsh-lazy-require/**"
+  - "node_modules/@deepseek-ai/dsh-subprocess/**"
+  - "node_modules/@deepseek-ai/dsh-skill/**"
+  - "node_modules/@deepseek-ai/dsh-scope/**"
+  - "node_modules/@deepseek-ai/dsh-util-values/**"
+  - "node_modules/@deepseek-ai/cordis/**"
+  - "node_modules/@deepseek-ai/cosmokit/**"
+  - "node_modules/@deepseek-ai/schemastery/**"
+  - "node_modules/yaml/**"
+  - "node_modules/@deepseek-ai/node-addon-system*/**"
   - "node_modules/@anthropic-ai/claude-agent-sdk-*/**" # native CLI binary must live on disk to be spawned
   - "node_modules/@silvia-odwyer/photon-node/**" # pi SDK WASM dep: photon_rs.js does fs.readFileSync(__dirname/photon_rs_bg.wasm)
   - "node_modules/@aiany/sqlite-vec-*/**" # sqlite-vec extension (.dylib/.so/.dll) is dlopen'd at runtime — must live on disk
@@ -118,7 +132,7 @@ win:
     - target: nsis
     - target: portable
   signtoolOptions:
-    sign: scripts/win-sign.js
+    sign: scripts/packaging/win-sign.js
   signExts:
     - .node
   verifyUpdateCodeSignature: false
@@ -133,7 +147,7 @@ nsis:
   oneClick: false
   include: build/nsis-installer.nsh
   buildUniversalInstaller: false
-  differentialPackage: false
+  differentialPackage: true
 portable:
   artifactName: ${productName}-${version}-${arch}-portable.${ext}
   buildUniversalInstaller: false
@@ -177,123 +191,86 @@ rpm:
 publish:
   provider: generic
   url: https://releases.cherry-ai.com
+  useMultipleRangeRequest: false
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/
-beforePack: scripts/before-pack.js
-afterPack: scripts/after-pack.js
-afterSign: scripts/notarize.js
-artifactBuildCompleted: scripts/artifact-build-completed.js
+beforePack: scripts/packaging/before-pack.js
+afterPack: scripts/packaging/after-pack.js
+afterSign: scripts/packaging/notarize.js
+artifactBuildCompleted: scripts/packaging/artifact-build-completed.js
 releaseInfo:
   releaseNotes: |
     <!--LANG:en-->
-    Cherry Studio 2.1.3 - New Features, Performance, and Reliability
+    Cherry Studio 2.1.5 - Remote Attachments, Channels, and Major Improvements
 
     ✨ New Features
-    - [Remote] Device Connections: pair a compatible mobile client to import providers and use desktop Agents over an encrypted LAN connection, with reconnect recovery, execution failures, approvals and questions. Action required: legacy devices must pair again for the new identity-based protocol.
-    - [Document] Support self-hosted MinerU 4 document parsing while retaining compatibility with legacy Open MinerU servers.
-    - [Screenshot] Use system OCR on macOS and Windows to select and copy screenshot text without downloading a local model.
-    - [Models] Add Claude Opus 5.5 to API chat with updated model limits, pricing, reasoning controls, and web-tool eligibility.
-    - [Models] Add GPT-6 Sol and Luna catalog metadata, OpenAI web-search eligibility, and OpenAI Codex model entries.
-    - [Models] Add Grok 4.7 to the model catalog (xAI, OpenRouter, Vercel AI Gateway, OpenCode, Copilot) with the xhigh reasoning effort; Grok CLI now lists Grok 4.6, Grok 4.7 and Grok 4.7 Fast; Grok 4.6 gains the xhigh reasoning effort.
-    - [Models] Add Xiaomi MiMo V2.6 Flash, Pro and Pro-UltraSpeed to the model catalog for the MiMo, OpenRouter, Vercel AI Gateway and OpenCode providers, with the thinking on/off switch.
-    - [Skills] Adds protected automatic file saving and manual remote updates for Skills installed from exact supported paths.
-    - [Skills] Adds dedicated Skill detail pages, source labels, safer removal, and one-click launch into an Agent session.
-    - [Settings] Add an “Agent reply language” setting (default: follow the conversation language) with preset and custom values, plus a per-agent override with an effective-language preview, so users can pin the language agents reply in.
-    - [Shortcuts] On macOS, Command+W now closes the active tab instead of the window; closing the window moved to Command+Shift+W.
+    - [Remote Access] Upload images and files to remote Agent sessions from your paired mobile device, with resumable transfers up to 1 GiB per file.
+    - [Channels] Add WeCom and DingTalk channels with QR setup, Agent conversations, streaming replies, notifications, and attachments.
+    - [MCP] Support MCP SDK v2 with interactive requests, validated forms, cancellation, and structured results across chat and agent runtimes.
+    - [Agent] Upgrade Pi runtime to 1.0 with native sandboxed Code Mode and MCP support. Action required: update custom Pi scripts to the native codemode API.
+    - [Doctor] System Doctor gains an AI analysis section that reads diagnostic reports and proposes bounded fixes you can apply and undo.
+    - [Device Connections] Improve mobile onboarding with platform-specific downloads, remembered progress, and automatic mobile previews.
+    - [Paintings] Minimize the prompt dock after generate, zoom generated images with the mouse wheel, and open the shared image viewer on click.
+    - [Models] Add Claude Haiku 5.5 support with reasoning controls, updated token limits, pricing, and Claude Code availability.
+    - [Composer] Highlight the MCP toolbar shortcut when MCP tools are enabled for the current chat or agent session.
+    - [Web Search] Add self-hosted Crawl4AI as a URL-fetch provider with configurable API Host and optional bearer token.
+    - [Windows] Use native caption buttons in main and detached windows while preserving custom title bars and theme adaptation.
+    - [Updates] Enable native differential downloads to reduce update size when a compatible cached installer is available.
+    - [File Preview] Improve document previews with touch zoom, resilient PowerPoint slides, and clearer size-limit fallbacks. Add WebView compatibility for mobile integration.
+    - [Archive] Restoring an agent now also restores its sessions, and archived task/topic rows show their owning agent or assistant.
 
     🐛 Bug Fixes
-    - [Settings] Restore scrolling the provider model list from outside the list and let group headings scroll with the page.
-    - [Settings] English search terms now find the V2 conversation style setting.
-    - [Settings] Automatically verify and enable providers after adding models, and prevent model-selection dialogs from jumping when large lists load.
-    - [Proxy] Fixed local services such as DeepSeek Harness failing to connect when IPv4 or IPv6 loopback requests were routed through a proxy.
-    - [Proxy] Fix model list synchronization failing behind a corporate proxy or with an intercepted TLS certificate, which previously failed even though the provider itself worked for chat.
-    - [Proxy] Fix proxy bypass rules written as bare IPv6 literals (`::1`, `fe80::1`, `2001:db8::1`) never matching, and match IPv6 addresses by value so equivalent notations are recognized.
-    - [Agent] Scheduled tasks can now be edited in place through the cron tool, with session-reuse controls and clearer name-conflict guidance.
-    - [Agent] The bundled Cherry tool guide now describes when the notify tool is available and how scheduled tasks get their notification recipients.
-    - [Agent] Fixed dsh-type Agent sessions failing on proxy-only networks by inheriting the configured proxy into the agent runtime process.
-    - [Agent] Keep multi-agent requests in one reply until all work finishes, with compact subtask lists and reliable nested-task navigation.
-    - [Agent] Fixed sent-message link chips and website hover previews opening separate tabs instead of using the Agent conversation's browser pane.
-    - [Chat] Improve the thinking panel height, scrolling, and text readability for long reasoning content.
-    - [Chat] Keep unsubmitted AskUserQuestion answers when switching conversations, so returning to a pending question resumes where the user left off.
-    - [Chat] Fixed token usage not being calculated or displayed for some models after message refresh.
-    - [Chat] Fixed chat messages failing to stay at the bottom after scrolling down with the mouse wheel or dragging the scrollbar.
-    - [Chat] Fixed Responses continuations that sent a UUID as an input item id and were rejected because the id must begin with rs or msg.
-    - [Chat] Fix migrated managed images that still point to an old data directory.
-    - [Skills] Fix skill ZIP import refusing a within-limit skill because the repository archive around it exceeded the old shared ceilings; skill packs may now hold up to 20,000 files.
-    - [Skills] Fixed ClawHub skill installation failing because the download size limit was undefined.
-    - [Skills] Skill installs from Claude Plugins and skills.sh now download only the skill's directory instead of the whole repository, and installing a larger skill from a GitHub link no longer times out.
-    - [Skills] Improve name readability in the two-column settings layout while preserving card size, and show full names and descriptions in tooltips.
-    - [Skills] Fix slash-command and Skills menus while editing messages and after cancelling edits.
-    - [Skills] Fixed CLI cards stuck on “Installing…” when no install was actually running; the status now reconciles against live operations instead of trusting leftover markers.
-    - [Screenshot] Fixed the screenshot toolbar being partly pushed off screen when the selection is near the left edge of a display.
-    - [File] Fixed workspace file trees stopping after a transient Windows file-lock watcher error.
-    - [File] Preserve directory state across brief page switches without keeping the page active.
-    - [AI] Fixed Gemini requests failing with unknown-field 400 errors when a tool schema contains propertyNames or additionalProperties keywords.
-    - [AI] Show clear HTTP 400 request-failure messages and preserve Claude Agent SDK HTTP status codes for accurate error classification.
-    - [AI] Explain HTTP 413 agent request failures and suggest reducing payload size before retrying.
-    - [Windows] Fixed a Windows startup crash when application control blocks the native shutdown handler.
-    - [Linux] Linux AppImages no longer require the system libfuse2 library.
-    - [Mini Apps] Fix the Add mini app dialog width so installation content remains within the dialog.
-    - [History] Chat and Agent history now use archive icons and labels that accurately describe their recoverable archive actions.
-    - [UI] Fixed tooltip content sometimes lingering pinned to the top-left corner after clicking a file path in agent sessions.
-    - [UI] Fixed tooltips lingering at the window's top-left corner after switching right-pane panels.
-    - [UI] Keep message, conversation, and clear actions accessible on devices without hover support, including Windows tablets with detached keyboards.
-    - [Error] Render error causes as text instead of HTML for safer display.
-    - [Citations] Citation panel sources now open in the sidebar browser on left click and in a separate application tab on middle click.
+    - [Agent] Fix browser tool timeouts when switching sessions or closing tabs during an active task.
+    - [Agent] Fix tool-denial reasons being mistaken for tool output — now explicitly attributed as the user's words.
+    - [Chat] Fix mid-response failures discarding already-streamed content — now preserved alongside the error.
+    - [Chat] Fix context compression progress not appearing inside the assistant message.
+    - [Chat] Fix horizontal multi-model answers blocking upward scroll to earlier chat history.
+    - [ComfyUI] Fix workflows with randomize seed rendering the same image every run.
+    - [ComfyUI] Fix partner (API) nodes failing without the provider's API key — now sent correctly.
+    - [ComfyUI] Fix workflows being converted with wrong values or failing with no_prompt_node.
+    - [Notifications] Fix completion notifications to show the topic or session name and the final sentence.
+    - [Notifications] Clear the macOS Dock badge when all notification preferences are turned off.
+    - [Markdown] Stop linkifying single-segment slash runs (like `/jX_s`) as file paths.
+    - [WebView] Limit native user agent to Google sign-in, preserving cleaned UA for AI Studio and other requests.
+    - [Open Responses] Fix conversations failing when compatible gateways emit marked SSE keep-alive deltas.
+    - [Backup] Fix local backups failing when the destination is a Windows drive root.
+    - [Channels] Fix Channels settings rendering errors caused by malformed user IDs in saved WeChat credentials.
+    - [Tools] Fix custom command-line tools named constructor or toString being misclassified as built-in Code CLIs.
 
     <!--LANG:zh-CN-->
-    Cherry Studio 2.1.3 - 新功能、性能与可靠性提升
+    Cherry Studio 2.1.5 - 远程附件、消息通道与重要改进
 
     ✨ 新功能
-    - [远程] 设备连接：配对兼容的移动客户端以导入供应商，并通过加密的局域网通道使用桌面 Agent，支持重连恢复、执行失败、审批和问答。注意：旧设备需要重新配对以使用新的身份协议。
-    - [文档] 支持自托管 MinerU 4 文档解析，同时保持与旧版 Open MinerU 服务器的兼容性。
-    - [截图] 在 macOS 和 Windows 上使用系统 OCR，无需下载本地模型即可选择和复制截图中的文字。
-    - [模型] 新增 Claude Opus 5.5，更新模型限制、定价、推理控制和网页工具资格。
-    - [模型] 新增 GPT-6 Sol 和 Luna 目录元数据、OpenAI 网页搜索资格和 OpenAI Codex 模型条目。
-    - [模型] 新增 Grok 4.7 到模型目录（xAI、OpenRouter、Vercel AI Gateway、OpenCode、Copilot），支持 xhigh 推理强度；Grok CLI 现在列出 Grok 4.6、Grok 4.7 和 Grok 4.7 Fast；Grok 4.6 新增 xhigh 推理强度。
-    - [模型] 新增小米 MiMo V2.6 Flash、Pro 和 Pro-UltraSpeed 到模型目录，支持 MiMo、OpenRouter、Vercel AI Gateway 和 OpenCode 供应商，提供思考模式开关。
-    - [技能] 为通过精确受支持路径安装的技能新增带冲突保护的文件自动保存和手动远程更新。
-    - [技能] 新增独立技能详情页、来源标签、更安全的删除操作，以及一键进入 Agent 会话试用技能。
-    - [设置] 新增”Agent 回复语言”设置（默认：跟随对话语言），支持预设值和自定义值，以及每个 Agent 的覆盖选项（使用全局/无约束/自定义）和有效语言预览，用户可以固定 Agent 回复使用的语言。
-    - [快捷键] 在 macOS 上，Command+W 现在关闭当前标签页而非窗口；关闭窗口改为 Command+Shift+W。
+    - [远程访问] 从已配对的移动端向远程 Agent 会话上传图片和文件，支持可恢复传输，单文件最大 1 GiB。
+    - [消息通道] 新增企业微信和钉钉通道，支持二维码设置、Agent 对话、流式回复、通知和附件。
+    - [MCP] 支持 MCP SDK v2，支持交互式请求、表单验证、取消和结构化结果，适用于对话和智能体运行时。
+    - [智能体] 升级 Pi 运行时到 1.0，支持原生沙箱化代码模式和 MCP。需要操作：更新自定义 Pi 脚本到原生 codemode API。
+    - [诊断] 系统诊断新增 AI 分析区域，读取诊断报告并提出可应用和撤销的有界修复建议。
+    - [设备连接] 改进移动端引导流程，支持平台特定下载、记忆进度和自动移动端预览。
+    - [绘图画廊] 生成后自动收起提示词面板，支持鼠标滚轮缩放图片，点击打开共享图片查看器。
+    - [模型] 新增 Claude Haiku 5.5 支持，包含推理控制、更新的 token 限制、定价和 Claude Code 可用性。
+    - [编辑器] 当 MCP 工具对当前对话或智能体会话启用时，高亮显示 MCP 工具栏快捷方式。
+    - [网页搜索] 新增自托管 Crawl4AI 作为 URL 获取供应商，支持配置 API Host 和可选的 bearer 令牌。
+    - [Windows] 在主窗口和分离窗口中使用原生标题栏按钮，同时保留自定义标题栏和主题适配。
+    - [更新] 启用原生差量下载，在有兼容的缓存安装包时减少更新大小。
+    - [文件预览] 改进文档预览，支持触控缩放、PowerPoint 幻灯片弹性和更清晰的大小限制回退。新增 WebView 兼容性以支持移动端集成。
+    - [回收站] 恢复智能体时同时恢复其会话，已归档的任务/主题行显示所属智能体或助手。
 
     🐛 问题修复
-    - [设置] 修复在模型列表外无法滚动供应商模型的问题，并取消模型分组标题吸顶。
-    - [设置] 英文搜索词现在可以找到 V2 对话风格设置。
-    - [设置] 添加模型后自动验证并启用供应商，防止大型列表加载时模型选择对话框跳动。
-    - [代理] 修复 IPv4 或 IPv6 本地回环请求被代理路由时，DeepSeek Harness 等本地服务无法连接的问题。
-    - [代理] 修复在企业代理或 TLS 证书被拦截的网络环境下，模型列表同步失败的问题（之前即使供应商本身可以用于聊天，同步也会失败）。
-    - [代理] 修复以裸 IPv6 字面量（`::1`、`fe80::1`、`2001:db8::1`）写入的代理绕过规则无法匹配的问题，并按值匹配 IPv6 地址以识别等效表示法。
-    - [智能体] 计划任务现在可以通过 cron 工具原地编辑，支持会话重用控制和更清晰的名称冲突提示。
-    - [智能体] 内置 Cherry 工具指南现在描述 notify 工具何时可用以及计划任务如何获取通知接收者。
-    - [智能体] 修复 dsh 类型 Agent 会话在仅代理网络上失败的问题，通过将配置的代理继承到 agent 运行时进程。
-    - [智能体] 将多 Agent 请求保持在一个回复中直到所有工作完成，提供紧凑的子任务列表和可靠的嵌套任务导航。
-    - [智能体] 修复发送消息链接卡片和网站悬停预览打开单独标签页而非使用 Agent 对话的浏览器窗格的问题。
-    - [对话] 改进思考面板的高度、滚动和长推理内容的文本可读性。
-    - [对话] 切换对话时保留未提交的 AskUserQuestion 答案，返回待处理问题时可以继续之前的状态。
-    - [对话] 修复刷新消息后某些模型的 token 用量未被计算或显示的问题。
-    - [对话] 修复使用鼠标滚轮或拖动滚动条向下滚动后，聊天消息无法保持在底部的问题。
-    - [对话] 修复 Responses 延续发送 UUID 作为输入项 ID 被拒绝的问题（ID 必须以 rs 或 msg 开头）。
-    - [对话] 修复迁移后的托管图片仍指向旧数据目录的问题。
-    - [技能] 修复技能 ZIP 导入因仓库存档超过旧的共享上限而拒绝符合限制的技能的问题；技能包现在最多可包含 20,000 个文件。
-    - [技能] 修复 ClawHub 技能安装因下载大小限制未定义而失败的问题。
-    - [技能] 从 Claude Plugins 和 skills.sh 安装技能现在仅下载技能目录而非整个仓库，从 GitHub 链接安装较大的技能不再超时。
-    - [技能] 改进双列布局中的名称可读性，同时保持卡片大小，并在工具提示中显示完整名称和描述。
-    - [技能] 修复编辑消息和取消编辑后的斜杠命令和技能菜单问题。
-    - [技能] 修复 CLI 卡片卡在”安装中…”状态而实际上没有安装的问题；状态现在与实际操作协调而非信任残留标记。
-    - [截图] 修复选择靠近显示器左边缘时截图工具栏部分被推出屏幕的问题。
-    - [文件] 修复由于短暂的 Windows 文件锁定监视器错误导致工作区文件树停止的问题。
-    - [文件] 在短暂的页面切换期间保留目录状态，而无需保持页面活动。
-    - [AI] 修复工具模式包含 propertyNames 或 additionalProperties 关键字时 Gemini 请求因未知字段返回 400 错误的问题。
-    - [AI] 显示清晰的 HTTP 400 请求失败消息，并保留 Claude Agent SDK HTTP 状态代码以进行准确的错误分类。
-    - [AI] 解释 HTTP 413 Agent 请求失败并建议重试前减少有效负载大小。
-    - [Windows] 修复应用程序控制阻止本机关闭处理程序时的 Windows 启动崩溃。
-    - [Linux] Linux AppImage 不再需要系统 libfuse2 库。
-    - [小程序] 修复添加小程序对话框宽度，使安装内容保持在对话框内。
-    - [历史] 聊天和 Agent 历史现在使用准确描述其可恢复存档操作的存档图标和标签。
-    - [界面] 修复在 Agent 会话中点击文件路径后工具提示内容有时会固定在窗口左上角的问题。
-    - [界面] 修复切换右侧窗格面板后工具提示在窗口左上角残留的问题。
-    - [界面] 在不支持悬停的设备上（包括分离键盘的 Windows 平板电脑）保持消息、对话和清除操作可访问。
-    - [错误] 将错误原因以文本而非 HTML 形式渲染，以更安全地显示。
-    - [引用] 引用面板来源现在在左键单击时在侧边栏浏览器中打开，中键单击时在单独的应用程序标签页中打开。
+    - [智能体] 修复在活跃任务期间切换会话或关闭标签页导致浏览器工具超时的问题。
+    - [智能体] 修复工具拒绝原因被误认为工具输出的问题 — 现在明确归属为用户的意见。
+    - [对话] 修复响应中途失败时丢失已流式内容的问题 — 现在内容与错误一并保留。
+    - [对话] 修复上下文压缩进度未显示在助手消息内的问题。
+    - [对话] 修复水平多模型回答阻止向上滚动到较早对话历史的问题。
+    - [ComfyUI] 修复随机种子的重复生成相同图像的问题。
+    - [ComfyUI] 修复合作伙伴 (API) 节点因缺少供应商 API 密钥而失败的问题 — 现在正确发送。
+    - [ComfyUI] 修复工作流被转换时值错误或 no_prompt_node 失败的问题。
+    - [通知] 修复完成通知显示对话名称和最后一句的问题。
+    - [通知] 当所有通知偏好关闭时清除 macOS Dock 徽章。
+    - [Markdown] 停止将单段斜杠运行（如 `/jX_s`）识别为文件路径。
+    - [网页视图] 将原生 User Agent 仅限于 Google 登录，为 AI Studio 和其他请求保留清理后的 UA。
+    - [Open Responses] 修复兼容网关发送标记的 SSE keep-alive 增量时对话失败的问题。
+    - [备份] 修复备份目标为 Windows 驱动器根目录时失败的问题。
+    - [通道] 修复保存的企业微信凭据中格式错误的用户 ID 导致通道设置渲染错误的问题。
+    - [工具] 修复名为 constructor 或 toString 的自定义命令行工具被错误分类为内置 Code CLI 的问题。
     <!--LANG:END-->

@@ -39,5 +39,15 @@ export {
 } from './agent/checkpoints'
 export type { AgentCheckpointDescriptor, AgentCheckpointPage } from './agent/checkpoints'
 export { encodeAgentCommand } from './agent/commands'
-export { applyAgentEvents, installAgentCheckpoint } from './agent/reducer'
+export { applyAgentEvents, installAgentCheckpoint, textByteLength } from './agent/reducer'
 export type { MaterializedContent, ApplyAgentEventsResult, InstallAgentCheckpointResult } from './agent/reducer'
+
+export { agentUploadLimits, uploadMetadataSchema, uploadReferenceSchema, uploadReferencesSchema } from './agent/uploads'
+export type { AgentUploadMetadata, AgentUploadReference, AgentUploadState, AgentUploadResume } from './agent/uploads'
+
+export {
+  attachmentSelectionSchema,
+  attachmentDraftManifestSchema,
+  attachmentDraftSubmissionSchema
+} from './agent/attachmentDrafts'
+export type { AgentAttachmentSelection, AgentAttachmentDraftItem } from './agent/attachmentDrafts'
