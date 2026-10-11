@@ -32,6 +32,7 @@ files:
   - "!**/{tsconfig.json,tsconfig.tsbuildinfo,tsconfig.node.json,tsconfig.web.json}"
   - "!**/{.editorconfig,.jekyll-metadata}"
   - "!src"
+  - "!native"
   - "!config"
   - "!patches"
   - "!**/node_modules/**/*.cpp"
@@ -64,6 +65,9 @@ files:
   - "!node_modules/@tavily/core/node_modules/js-tiktoken"
   - "!node_modules/pdf-parse/lib/pdf.js/{v1.9.426,v1.10.88,v2.0.550}"
   - "!node_modules/mammoth/{mammoth.browser.js,mammoth.browser.min.js}"
+  - "!**/node_modules/better-sqlite3/{bin,deps,src}/**"
+  - "!**/node_modules/better-sqlite3/build/{Debug,Release/obj}/**"
+  - "!**/node_modules/{selection-hook,@earendil-works/pi-coding-agent}/docs/**"
   # node-gyp-build prefers build/Release over prebuilds/, so ship the prebuilds and drop the
   # host-arch rebuild — a cross-built arm64 package would otherwise load the x86-64 binary (#20530).
   - "!node_modules/selection-hook/build/**"
@@ -79,6 +83,7 @@ files:
   - "!**/*.{h,iobj,ipdb,tlog,recipe,vcxproj,vcxproj.filters,Makefile,*.Makefile}" # filter .node build files
   - "resources/**/*" # include all files in resources, and unpack them from asar for runtime access
   - "!resources/devtools/**" # dev-only extensions are loaded from source in development
+  - "node_modules/@deepseek-ai/dsh-sandbox-windows-acl/assets/**"
 asarUnpack:
   - resources/**
   - "!resources/devtools/**"
@@ -95,7 +100,16 @@ asarUnpack:
   - "node_modules/@koromix/koffi-*/**"
   - "node_modules/@deepseek-ai/dsh-sandbox-windows-acl/**"
   - "node_modules/@deepseek-ai/dsh-win32-process/**"
-  - "node_modules/@deepseek-ai/node-addon-landlock-run*/**"
+  - "node_modules/@deepseek-ai/dsh-lazy-require/**"
+  - "node_modules/@deepseek-ai/dsh-subprocess/**"
+  - "node_modules/@deepseek-ai/dsh-skill/**"
+  - "node_modules/@deepseek-ai/dsh-scope/**"
+  - "node_modules/@deepseek-ai/dsh-util-values/**"
+  - "node_modules/@deepseek-ai/cordis/**"
+  - "node_modules/@deepseek-ai/cosmokit/**"
+  - "node_modules/@deepseek-ai/schemastery/**"
+  - "node_modules/yaml/**"
+  - "node_modules/@deepseek-ai/node-addon-system*/**"
   - "node_modules/@anthropic-ai/claude-agent-sdk-*/**" # native CLI binary must live on disk to be spawned
   - "node_modules/@silvia-odwyer/photon-node/**" # pi SDK WASM dep: photon_rs.js does fs.readFileSync(__dirname/photon_rs_bg.wasm)
   - "node_modules/@aiany/sqlite-vec-*/**" # sqlite-vec extension (.dylib/.so/.dll) is dlopen'd at runtime — must live on disk
@@ -118,7 +132,7 @@ win:
     - target: nsis
     - target: portable
   signtoolOptions:
-    sign: scripts/win-sign.js
+    sign: scripts/packaging/win-sign.js
   signExts:
     - .node
   verifyUpdateCodeSignature: false
@@ -133,7 +147,7 @@ nsis:
   oneClick: false
   include: build/nsis-installer.nsh
   buildUniversalInstaller: false
-  differentialPackage: false
+  differentialPackage: true
 portable:
   artifactName: ${productName}-${version}-${arch}-portable.${ext}
   buildUniversalInstaller: false
@@ -177,77 +191,86 @@ rpm:
 publish:
   provider: generic
   url: https://releases.cherry-ai.com
+  useMultipleRangeRequest: false
 electronDownload:
   mirror: https://npmmirror.com/mirrors/electron/
-beforePack: scripts/before-pack.js
-afterPack: scripts/after-pack.js
-afterSign: scripts/notarize.js
-artifactBuildCompleted: scripts/artifact-build-completed.js
+beforePack: scripts/packaging/before-pack.js
+afterPack: scripts/packaging/after-pack.js
+afterSign: scripts/packaging/notarize.js
+artifactBuildCompleted: scripts/packaging/artifact-build-completed.js
 releaseInfo:
   releaseNotes: |
     <!--LANG:en-->
-    Cherry Studio 2.1.2 - Stability and User Experience Improvements
+    Cherry Studio 2.1.5 - Remote Attachments, Channels, and Major Improvements
 
     ✨ New Features
-    - [Model] Add oMLX as a built-in local provider, with its base URL preset and no API key required.
-    - [Model] Add Moonshot AI global endpoint for users of the international Moonshot console.
-    - [Settings] Renamed Recycle Bin to Archive and promoted it to a standalone settings page with improved layout and navigation.
-    - [MCP] The built-in mcp-auto-install server now keeps its Registry cache and config writes inside Cherry's config directory.
-    - [Sign-in] CherryIN sign-in now uses a local HTTP callback instead of the system custom-protocol handler.
-    - [Agents] Return to the original chat from a link at the fork boundary.
-    - [WebView] The browser pane's “Annotate page” picker now uses a consistent icon and follows your primary color.
-    - [Painting] Honor model-declared maxInputImages for generate_image references.
+    - [Remote Access] Upload images and files to remote Agent sessions from your paired mobile device, with resumable transfers up to 1 GiB per file.
+    - [Channels] Add WeCom and DingTalk channels with QR setup, Agent conversations, streaming replies, notifications, and attachments.
+    - [MCP] Support MCP SDK v2 with interactive requests, validated forms, cancellation, and structured results across chat and agent runtimes.
+    - [Agent] Upgrade Pi runtime to 1.0 with native sandboxed Code Mode and MCP support. Action required: update custom Pi scripts to the native codemode API.
+    - [Doctor] System Doctor gains an AI analysis section that reads diagnostic reports and proposes bounded fixes you can apply and undo.
+    - [Device Connections] Improve mobile onboarding with platform-specific downloads, remembered progress, and automatic mobile previews.
+    - [Paintings] Minimize the prompt dock after generate, zoom generated images with the mouse wheel, and open the shared image viewer on click.
+    - [Models] Add Claude Haiku 5.5 support with reasoning controls, updated token limits, pricing, and Claude Code availability.
+    - [Composer] Highlight the MCP toolbar shortcut when MCP tools are enabled for the current chat or agent session.
+    - [Web Search] Add self-hosted Crawl4AI as a URL-fetch provider with configurable API Host and optional bearer token.
+    - [Windows] Use native caption buttons in main and detached windows while preserving custom title bars and theme adaptation.
+    - [Updates] Enable native differential downloads to reduce update size when a compatible cached installer is available.
+    - [File Preview] Improve document previews with touch zoom, resilient PowerPoint slides, and clearer size-limit fallbacks. Add WebView compatibility for mobile integration.
+    - [Archive] Restoring an agent now also restores its sessions, and archived task/topic rows show their owning agent or assistant.
 
     🐛 Bug Fixes
-    - [Sidebar] Clicking an app icon in the sidebar replaces the active tab again instead of jumping to another tab.
-    - [Sidebar] All resource shortcuts can now be removed via context menus.
-    - [Settings] Fixed settings, authorization, billing, and feedback links opening in the internal browser instead of the system browser.
-    - [Settings] English search terms now find the V2 serif-font setting.
-    - [Agents] Fixed timeouts when forking long DSH conversations.
-    - [Models] Fix outdated DeepSeek model listings and refresh the bundled catalog and pricing.
-    - [Models] Keep valid LM Studio models when one catalog entry is malformed.
-    - [Tools] Fixed skill installation, Skill tool dependency check, and Windows binary management failing when command lookup times out or errors.
-    - [Input] AskUserQuestion answers now wrap and grow, and keep selected options when a custom note is typed.
-    - [AI] Fixed Gemini requests failing with HTTP 400 when a tool's parameters declare numeric or boolean enum values.
-    - [AI] Fix Gemini requests failing with HTTP 400 when the built-in browser tools are enabled.
-    - [Markdown] Fixed KaTeX-stretched symbols (e.g., square roots) disappearing from rendered formulas.
-    - [Markdown] Keep the UI responsive during long agent streams by avoiding full markdown re-parse on each tick.
-    - [Markdown] Fixed emphasis formatting being lost after saving notes with adjacent punctuation.
-    - [Windows] Fixed agent-session trace history never being saved.
-    - [Chat] Fixed AI replies involving tool or MCP calls having no Edit option; their text is now editable.
-    - [Privacy] Fixed analytics events still being sent after disabling data collection.
-    - [macOS] Warn Apple Silicon users running the Intel build and link to the correct edition's download page.
+    - [Agent] Fix browser tool timeouts when switching sessions or closing tabs during an active task.
+    - [Agent] Fix tool-denial reasons being mistaken for tool output — now explicitly attributed as the user's words.
+    - [Chat] Fix mid-response failures discarding already-streamed content — now preserved alongside the error.
+    - [Chat] Fix context compression progress not appearing inside the assistant message.
+    - [Chat] Fix horizontal multi-model answers blocking upward scroll to earlier chat history.
+    - [ComfyUI] Fix workflows with randomize seed rendering the same image every run.
+    - [ComfyUI] Fix partner (API) nodes failing without the provider's API key — now sent correctly.
+    - [ComfyUI] Fix workflows being converted with wrong values or failing with no_prompt_node.
+    - [Notifications] Fix completion notifications to show the topic or session name and the final sentence.
+    - [Notifications] Clear the macOS Dock badge when all notification preferences are turned off.
+    - [Markdown] Stop linkifying single-segment slash runs (like `/jX_s`) as file paths.
+    - [WebView] Limit native user agent to Google sign-in, preserving cleaned UA for AI Studio and other requests.
+    - [Open Responses] Fix conversations failing when compatible gateways emit marked SSE keep-alive deltas.
+    - [Backup] Fix local backups failing when the destination is a Windows drive root.
+    - [Channels] Fix Channels settings rendering errors caused by malformed user IDs in saved WeChat credentials.
+    - [Tools] Fix custom command-line tools named constructor or toString being misclassified as built-in Code CLIs.
 
     <!--LANG:zh-CN-->
-    Cherry Studio 2.1.2 - 稳定性与用户体验改进
+    Cherry Studio 2.1.5 - 远程附件、消息通道与重要改进
 
     ✨ 新功能
-    - [模型] 新增 oMLX 内置本地服务商，预设 base URL，无需 API 密钥。
-    - [模型] 新增 Moonshot AI 全球端点，方便使用国际版 Moonshot 控制台的用户连接。
-    - [设置] 将回收站重命名为归档，并提升为独立设置页面，改进布局和导航。
-    - [MCP] 内置 mcp-auto-install 服务器将 Registry 缓存和配置写入保持在 Cherry 的配置目录。
-    - [登录] CherryIN 登录使用本地 HTTP 回调，不再依赖系统自定义协议处理程序。
-    - [智能体] 从分叉边界链接返回原始对话。
-    - [WebView] 浏览器窗格的”标注页面”选择器现在使用一致的图标并跟随主题色。
-    - [绘图] 生成图像时遵守模型声明的最大输入图片数限制。
+    - [远程访问] 从已配对的移动端向远程 Agent 会话上传图片和文件，支持可恢复传输，单文件最大 1 GiB。
+    - [消息通道] 新增企业微信和钉钉通道，支持二维码设置、Agent 对话、流式回复、通知和附件。
+    - [MCP] 支持 MCP SDK v2，支持交互式请求、表单验证、取消和结构化结果，适用于对话和智能体运行时。
+    - [智能体] 升级 Pi 运行时到 1.0，支持原生沙箱化代码模式和 MCP。需要操作：更新自定义 Pi 脚本到原生 codemode API。
+    - [诊断] 系统诊断新增 AI 分析区域，读取诊断报告并提出可应用和撤销的有界修复建议。
+    - [设备连接] 改进移动端引导流程，支持平台特定下载、记忆进度和自动移动端预览。
+    - [绘图画廊] 生成后自动收起提示词面板，支持鼠标滚轮缩放图片，点击打开共享图片查看器。
+    - [模型] 新增 Claude Haiku 5.5 支持，包含推理控制、更新的 token 限制、定价和 Claude Code 可用性。
+    - [编辑器] 当 MCP 工具对当前对话或智能体会话启用时，高亮显示 MCP 工具栏快捷方式。
+    - [网页搜索] 新增自托管 Crawl4AI 作为 URL 获取供应商，支持配置 API Host 和可选的 bearer 令牌。
+    - [Windows] 在主窗口和分离窗口中使用原生标题栏按钮，同时保留自定义标题栏和主题适配。
+    - [更新] 启用原生差量下载，在有兼容的缓存安装包时减少更新大小。
+    - [文件预览] 改进文档预览，支持触控缩放、PowerPoint 幻灯片弹性和更清晰的大小限制回退。新增 WebView 兼容性以支持移动端集成。
+    - [回收站] 恢复智能体时同时恢复其会话，已归档的任务/主题行显示所属智能体或助手。
 
     🐛 问题修复
-    - [侧边栏] 点击侧边栏的应用图标再次替换当前标签页，而非跳转到同一应用的其他标签页。
-    - [侧边栏] 所有资源快捷方式现在可以通过右键菜单移除。
-    - [设置] 修复设置、授权、账单和反馈链接在内置浏览器打开而非系统浏览器的问题。
-    - [设置] 英文搜索词现在可以找到 V2 衬线字体设置。
-    - [智能体] 修复分叉长时间 DSH 对话时的超时问题。
-    - [模型] 修复 DeepSeek 模型列表过时的问题，刷新内置目录和定价。
-    - [模型] 当单个目录条目格式错误时保留有效的 LM Studio 模型。
-    - [工具] 修复技能安装、Skill 工具依赖检查和 Windows 二进制管理在命令查找超时或出错时失败的问题。
-    - [输入] AskUserQuestion 回答现在可以换行和增长，并在输入自定义说明时保留已选选项。
-    - [AI] 修复工具参数声明数字或布尔枚举值时 Gemini 请求返回 400 错误的问题。
-    - [AI] 修复启用内置浏览器工具时 Gemini 请求返回 400 错误的问题。
-    - [Markdown] 修复 KaTeX 拉伸符号（如平方根）在渲染公式中消失的问题。
-    - [Markdown] 长 agent 流式输出时避免已稳定段落每 tick 全量重解析，降低界面卡顿。
-    - [Markdown] 修复保存笔记时相邻标点导致强调格式丢失的问题。
-    - [Windows] 修复智能体会话跟踪历史从未保存的问题。
-    - [对话] 修复涉及工具或 MCP 调用的 AI 回复没有编辑选项的问题，现在可以编辑文本。
-    - [隐私] 修复禁用数据收集后仍发送分析事件的问题。
-    - [macOS] 提醒在 Apple Silicon 上运行 Intel 版本的用户，并链接到正确版本的下载页面。
+    - [智能体] 修复在活跃任务期间切换会话或关闭标签页导致浏览器工具超时的问题。
+    - [智能体] 修复工具拒绝原因被误认为工具输出的问题 — 现在明确归属为用户的意见。
+    - [对话] 修复响应中途失败时丢失已流式内容的问题 — 现在内容与错误一并保留。
+    - [对话] 修复上下文压缩进度未显示在助手消息内的问题。
+    - [对话] 修复水平多模型回答阻止向上滚动到较早对话历史的问题。
+    - [ComfyUI] 修复随机种子的重复生成相同图像的问题。
+    - [ComfyUI] 修复合作伙伴 (API) 节点因缺少供应商 API 密钥而失败的问题 — 现在正确发送。
+    - [ComfyUI] 修复工作流被转换时值错误或 no_prompt_node 失败的问题。
+    - [通知] 修复完成通知显示对话名称和最后一句的问题。
+    - [通知] 当所有通知偏好关闭时清除 macOS Dock 徽章。
+    - [Markdown] 停止将单段斜杠运行（如 `/jX_s`）识别为文件路径。
+    - [网页视图] 将原生 User Agent 仅限于 Google 登录，为 AI Studio 和其他请求保留清理后的 UA。
+    - [Open Responses] 修复兼容网关发送标记的 SSE keep-alive 增量时对话失败的问题。
+    - [备份] 修复备份目标为 Windows 驱动器根目录时失败的问题。
+    - [通道] 修复保存的企业微信凭据中格式错误的用户 ID 导致通道设置渲染错误的问题。
+    - [工具] 修复名为 constructor 或 toString 的自定义命令行工具被错误分类为内置 Code CLI 的问题。
     <!--LANG:END-->
